@@ -7,37 +7,41 @@
 - Vite
 - TypeScript
 - Vanilla JavaScript（UIフレームワーク不使用）
-- ブラウザ標準の Fetch API
+- ブラウザ標準の Fetch API / WebSocket API
 
 ## セットアップ
 
-Node.js と npm を用意し、プロジェクトのルートで実行します。
+Node.js と pnpm を用意し、プロジェクトのルートで実行します。
 
 ```sh
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
 表示されたローカルURLをブラウザで開いてください。
 
 ## 開発コマンド
 
-- `npm run dev` — 開発サーバーを起動
-- `npm run build` — TypeScriptの型検査と本番ビルド
-- `npm run preview` — 本番ビルドをローカルで確認
+- `pnpm run dev` — 開発サーバーを起動
+- `pnpm run build` — TypeScriptの型検査と本番ビルド
+- `pnpm run preview` — 本番ビルドをローカルで確認
 
 ## 地震情報API
 
-[P2P地震情報 JSON API v2](https://www.p2pquake.net/develop/json_api_v2/) の `GET /history?codes=551&limit=10` を利用します。情報コード551（地震情報）の最新10件を取得し、地震情報のない応答は画面表示から除外します。APIの仕様に従い、30秒間隔で再取得します。
+[P2P地震情報 JSON API v2](https://www.p2pquake.net/develop/json_api_v2/) の `GET /history?codes=551&limit=10` で起動時の履歴を取得し、その後は `wss://api.p2pquake.net/v2/ws` から情報コード551（地震情報）をリアルタイム受信します。WebSocket切断時は1秒から最大30秒までの指数バックオフで自動再接続し、接続回復後にHTTPで履歴を一度取得して切断中の情報を補完します。右上のLIVE表示は実際のWebSocket接続状態を示します。
 
 ## 実装済みの機能
 
 - 最新の地震情報カード（最大震度、震源地、発生日時、マグニチュード、深さ）
 - 最近の地震情報一覧（最大10件）
 - ローカルSVG日本地図と、APIの緯度・経度を使った最新震源マーカー
+- 起動時のHTTP履歴取得とWebSocketによるリアルタイム更新
+- WebSocketの自動再接続、再接続後のHTTP履歴補完、接続状態表示
 - 初回ローディング表示、通信失敗時のエラー表示と再試行
-- 取得後の更新失敗を既存表示に影響させず通知
+- 情報IDによる重複排除（直近256 IDを保持）
 - レスポンシブなダークテーマ
-- 通信の重複防止とページ離脱時のタイマー・通信停止
+- ページ離脱時の通信・再接続タイマー・イベントリスナー解放
+
+APIの `id` は個々の情報を識別しますが、複数の異なる情報IDを同一の地震イベントへ結び付ける安定したイベントIDは仕様にありません。そのため、異なるID間の訂正・続報を発生時刻などから推測して統合する処理は行わず、IDが同じ再配信のみ重複排除します。
 
 地震情報が発表されていない場合、取得可能な値が欠けている場合は、その旨または `—` を表示します。
