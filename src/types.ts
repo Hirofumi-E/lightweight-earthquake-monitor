@@ -5,7 +5,7 @@ export interface P2PQuake {
   issue?: { type?: string; source?: string; time?: string };
   earthquake?: {
     time?: string;
-    hypocenter?: { name?: string; depth?: number; magnitude?: number };
+    hypocenter?: { name?: string; depth?: number; magnitude?: number; latitude?: number; longitude?: number };
     maxScale?: number;
   };
 }
@@ -17,4 +17,6 @@ export interface Earthquake {
   maxScale: number | null;
   magnitude: number | null;
   depth: number | null;
+  latitude: number | null;
+  longitude: number | null;
 }

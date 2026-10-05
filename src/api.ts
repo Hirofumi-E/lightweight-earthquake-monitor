@@ -18,5 +18,7 @@ export async function fetchRecentEarthquakes(signal?: AbortSignal): Promise<Eart
       maxScale: typeof item.earthquake?.maxScale === 'number' ? item.earthquake.maxScale : null,
       magnitude: typeof item.earthquake?.hypocenter?.magnitude === 'number' ? item.earthquake.hypocenter.magnitude : null,
       depth: typeof item.earthquake?.hypocenter?.depth === 'number' ? item.earthquake.hypocenter.depth : null,
+      latitude: typeof item.earthquake?.hypocenter?.latitude === 'number' ? item.earthquake.hypocenter.latitude : null,
+      longitude: typeof item.earthquake?.hypocenter?.longitude === 'number' ? item.earthquake.hypocenter.longitude : null,
     }));
 }
