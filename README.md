@@ -1,2 +1,42 @@
-# lightweight-earthquake-monitor
-A lightweight real-time earthquake monitor for Japan
+# Lightweight Earthquake Monitor
+
+日本国内の最近の地震情報を、ブラウザで常時確認するための軽量なダークテーマのWebアプリです。地図や大型UIライブラリを使わず、情報を読みやすいダッシュボードにまとめています。
+
+## 使用技術
+
+- Vite
+- TypeScript
+- Vanilla JavaScript（UIフレームワーク不使用）
+- ブラウザ標準の Fetch API
+
+## セットアップ
+
+Node.js と npm を用意し、プロジェクトのルートで実行します。
+
+```sh
+npm install
+npm run dev
+```
+
+表示されたローカルURLをブラウザで開いてください。
+
+## 開発コマンド
+
+- `npm run dev` — 開発サーバーを起動
+- `npm run build` — TypeScriptの型検査と本番ビルド
+- `npm run preview` — 本番ビルドをローカルで確認
+
+## 地震情報API
+
+[P2P地震情報 JSON API v2](https://www.p2pquake.net/develop/json_api_v2/) の `GET /history?codes=551&limit=10` を利用します。情報コード551（地震情報）の最新10件を取得し、地震情報のない応答は画面表示から除外します。APIの仕様に従い、30秒間隔で再取得します。
+
+## 実装済みの機能
+
+- 最新の地震情報カード（最大震度、震源地、発生日時、マグニチュード、深さ）
+- 最近の地震情報一覧（最大10件）
+- 初回ローディング表示、通信失敗時のエラー表示と再試行
+- 取得後の更新失敗を既存表示に影響させず通知
+- レスポンシブなダークテーマ
+- 通信の重複防止とページ離脱時のタイマー・通信停止
+
+地震情報が発表されていない場合、取得可能な値が欠けている場合は、その旨または `—` を表示します。
