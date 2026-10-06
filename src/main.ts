@@ -142,7 +142,7 @@ app.innerHTML = `
           </g>
           <g id="eew-marker" class="eew-marker" aria-label="EEW震源" />
         </svg>
-        <div class="map-controls" aria-label="地図操作" style="position:fixed;top:74px;right:18px;z-index:5;display:flex;gap:4px">
+        <div class="map-controls" aria-label="地図操作" style="position:fixed;top:74px;left:50%;right:auto;z-index:5;display:flex;gap:4px;transform:translateX(-50%)">
           <button id="map-zoom-in" type="button" aria-label="地図を拡大" title="拡大">＋</button>
           <button id="map-zoom-out" type="button" aria-label="地図を縮小" title="縮小">−</button>
           <button id="map-reset" type="button" aria-label="日本全国を表示" title="全国">全国</button>
