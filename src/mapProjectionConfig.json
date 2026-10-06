@@ -1,0 +1,9 @@
+{
+  "minLongitude": 122.93365306084013,
+  "maxLongitude": 153.98684416302774,
+  "minLatitude": 20.422746413816014,
+  "maxLatitude": 45.557243413952456,
+  "viewBoxSize": 800,
+  "padding": 24,
+  "simplificationToleranceDegrees": 0.06
+}

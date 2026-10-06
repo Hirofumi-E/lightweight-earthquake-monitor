@@ -12,58 +12,41 @@ if (!app) throw new Error('アプリの表示領域が見つかりません');
 app.innerHTML = `
   <div class="shell">
     <header class="topbar">
-      <a class="brand" href="/" aria-label="Lightweight Earthquake Monitor ホーム">
-        <span class="brand-mark" aria-hidden="true">＋</span>
-        <span><strong>Lightweight Earthquake Monitor</strong><small>JAPAN SEISMIC ACTIVITY</small></span>
-      </a>
-      <div class="topbar-right"><span class="monitor-label">EARTHQUAKE MONITOR / JP</span><div id="connection-status" class="live is-offline" role="status" aria-live="polite"><span class="live-dot"></span><span id="connection-label">OFFLINE</span></div></div>
+      <h1 class="brand">Lightweight Earthquake Monitor</h1>
+      <div id="connection-status" class="live is-offline" role="status" aria-live="polite"><span class="live-dot"></span><span id="connection-label">OFFLINE</span></div>
     </header>
-    <div class="workspace">
-      <nav class="side-nav" aria-label="メインナビゲーション">
-        <button class="nav-item is-active" type="button" data-view="realtime" aria-current="page"><span class="nav-icon nav-icon-live" aria-hidden="true">◉</span><span>リアル<br>タイム</span></button>
-        <button class="nav-item" type="button" data-view="earthquakes"><span class="nav-icon" aria-hidden="true">≋</span><span>地震情報</span></button>
-        <button class="nav-item is-disabled" type="button" disabled aria-disabled="true"><span class="nav-icon" aria-hidden="true">≈</span><span>津波情報<small>準備中</small></span></button>
-        <div class="nav-footer"><span class="nav-region">JP</span><span>v0.1</span></div>
-      </nav>
-      <main class="main-panel">
-        <section id="realtime-view" class="view-panel map-view" aria-labelledby="realtime-heading">
-          <div class="view-heading"><div><p class="eyebrow">REALTIME / JAPAN</p><h1 id="realtime-heading">リアルタイム地震情報</h1></div><div class="map-heading-meta"><span class="map-key"><i class="key-latest"></i>最新</span><span class="map-key"><i class="key-history"></i>過去の地震</span></div></div>
-          <div class="map-stage">
-            <div class="map-coordinate coordinate-north" aria-hidden="true">46°N</div>
-            <div class="map-coordinate coordinate-east" aria-hidden="true">146°E</div>
-            <svg id="japan-map" class="japan-map" viewBox="0 0 440 500" role="img" aria-label="日本列島と最近の震源位置">
-              <image href="${japanMapUrl}" width="440" height="500" />
-              <g id="earthquake-markers" class="earthquake-markers" aria-label="最近の震源" />
-            </svg>
-            <div id="map-status" class="map-status">地震情報を取得しています</div>
-            <div class="map-scale" aria-hidden="true"><span></span><span></span><span></span></div>
-          </div>
+    <main class="workspace">
+      <aside class="information-panel" aria-label="最新地震情報と地震履歴">
+        <section id="latest-card" class="latest-panel" aria-label="最新の地震情報" aria-live="polite">
+          <div class="panel-section-heading"><h2>最新の地震</h2><span class="latest-indicator"><i></i>最新</span></div>
+          <div id="latest-loading" class="loading"><span class="spinner"></span>地震情報を取得しています</div>
+          <article id="latest-details" class="latest-details" hidden>
+            <div class="latest-intensity-label">最大震度</div>
+            <strong id="latest-scale" class="scale-badge">—</strong>
+            <strong id="latest-place-name" class="latest-place">—</strong>
+            <time id="latest-date" class="latest-time">—</time>
+            <div class="latest-measures"><span id="latest-magnitude">M —</span><span id="latest-depth">深さ —</span></div>
+          </article>
+          <div class="panel-update"><span>情報状態</span><span id="updated-at">取得準備中</span></div>
         </section>
-        <section id="earthquakes-view" class="view-panel history-view" aria-labelledby="history-heading" hidden>
-          <div class="history-heading"><div><p class="eyebrow">RECENT ACTIVITY / JP</p><h1 id="history-heading">地震情報</h1><p class="history-description">最新の情報から最大10件を表示します</p></div><span id="event-count" class="event-count">—</span></div>
-          <div class="history-columns" aria-hidden="true"><span>発生時刻</span><span>震源地</span><span>最大震度</span><span>規模 / 深さ</span></div>
+        <section class="history-panel" aria-labelledby="history-heading">
+          <div class="panel-section-heading"><div><h2 id="history-heading">地震履歴</h2><p>最近の情報 最大10件</p></div><span id="event-count" class="event-count">—</span></div>
           <div id="earthquake-list" class="earthquake-list"><div class="list-loading">情報を読み込んでいます</div></div>
         </section>
-      </main>
+      </aside>
+      <section class="map-panel" aria-label="日本地図と震源">
+        <div class="map-legend" aria-label="地図の凡例"><span><i class="legend-current"></i>最新の震源</span><span><i class="legend-past"></i>過去の震源</span></div>
+        <svg id="japan-map" class="japan-map" viewBox="0 0 800 800" role="img" aria-label="日本の都道府県地図と最近の震源位置">
+          <image href="${japanMapUrl}" width="800" height="800" />
+          <g id="earthquake-markers" class="earthquake-markers" aria-label="最近の震源" />
+        </svg>
+        <p class="map-attribution">地図：気象庁「地震情報／都道府県等」のデータを加工して作成</p>
+        <p id="map-status" class="map-status">地震情報を取得しています</p>
+      </section>
     </div>
-    <footer id="latest-card" class="latest-strip" aria-label="最新の地震情報" aria-live="polite">
-      <div class="strip-title"><span class="strip-live-dot" aria-hidden="true"></span><div><strong>最新の地震</strong><small>NEWEST EVENT</small></div></div>
-      <div class="strip-content">
-        <div id="latest-loading" class="loading"><span class="spinner"></span>情報を取得しています</div>
-        <article id="latest-details" class="latest-details" hidden>
-          <div class="strip-intensity"><span>最大震度</span><strong id="latest-scale" class="scale">—</strong></div>
-          <strong id="latest-place-name" class="strip-place">—</strong>
-          <time id="latest-date" class="strip-time">—</time>
-          <span id="latest-magnitude" class="strip-measure">M —</span>
-          <span class="strip-divider" aria-hidden="true"></span>
-          <span id="latest-depth" class="strip-measure">深さ —</span>
-        </article>
-      </div>
-      <div class="strip-updated"><span>DATA STATUS</span><span id="updated-at" class="updated-at">取得準備中</span></div>
-    </footer>
   </div>`;
 
-const latestCard = document.querySelector<HTMLDivElement>('#latest-card')!;
+const latestCard = document.querySelector<HTMLElement>('#latest-card')!;
 const list = document.querySelector<HTMLDivElement>('#earthquake-list')!;
 const updatedAt = document.querySelector<HTMLSpanElement>('#updated-at')!;
 const eventCount = document.querySelector<HTMLSpanElement>('#event-count')!;
@@ -79,9 +62,6 @@ const earthquakeMarkers = document.querySelector<SVGGElement>('#earthquake-marke
 const mapStatus = document.querySelector<HTMLParagraphElement>('#map-status')!;
 const connectionStatus = document.querySelector<HTMLDivElement>('#connection-status')!;
 const connectionLabel = document.querySelector<HTMLSpanElement>('#connection-label')!;
-const realtimeView = document.querySelector<HTMLElement>('#realtime-view')!;
-const earthquakesView = document.querySelector<HTMLElement>('#earthquakes-view')!;
-const navigationButtons = [...document.querySelectorAll<HTMLButtonElement>('.nav-item[data-view]')];
 const store = new EarthquakeStore();
 let hasLoaded = false;
 let disposed = false;
@@ -248,25 +228,6 @@ function updateTimestamp(prefix = '最終更新'): void {
   updatedAt.textContent = `${prefix} ${new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
 }
 
-function setActiveView(view: 'realtime' | 'earthquakes'): void {
-  const showRealtime = view === 'realtime';
-  realtimeView.hidden = !showRealtime;
-  earthquakesView.hidden = showRealtime;
-  for (const button of navigationButtons) {
-    const active = button.dataset.view === view;
-    button.classList.toggle('is-active', active);
-    if (active) button.setAttribute('aria-current', 'page');
-    else button.removeAttribute('aria-current');
-  }
-}
-
-for (const button of navigationButtons) {
-  button.addEventListener('click', () => {
-    const view = button.dataset.view;
-    if (view === 'realtime' || view === 'earthquakes') setActiveView(view);
-  }, { signal: lifecycle.signal });
-}
-
 list.addEventListener('click', (event) => {
   const target = event.target;
   if (!(target instanceof Element)) return;
@@ -276,7 +237,6 @@ list.addEventListener('click', (event) => {
   selectedEarthquakeId = id;
   renderMarkers(store.recent);
   renderList(store.recent);
-  setActiveView('realtime');
 }, { signal: lifecycle.signal });
 
 function escapeHtml(value: string): string {
