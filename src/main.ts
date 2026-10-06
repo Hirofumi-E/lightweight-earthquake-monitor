@@ -19,6 +19,8 @@ const HIGH_CONFIDENCE_THRESHOLD = 0.8;
 const EEW_TIMEOUT_MS = 120_000;
 const EEW_CANCEL_DISPLAY_MS = 5_000;
 const MAX_EEW_EVENTS = 4;
+const MAX_MAP_ZOOM = 8;
+const MAP_ZOOM_FACTOR = 1.35;
 const EEW_SCALE_CODES = new Set([0, 10, 20, 30, 40, 45, 50, 55, 60, 70, 99]);
 const queryParameters = new URLSearchParams(window.location.search);
 const isTestMode = queryParameters.get('testMode') === '1';
@@ -130,6 +132,11 @@ app.innerHTML = `
       </aside>
       <section class="map-panel" aria-label="日本地図と震源">
         <div class="map-legend" aria-label="地図の凡例"><span><i class="legend-eew"></i>EEW予測</span><span><i class="legend-current"></i>最新の震源</span><span><i class="legend-detection"></i>揺れ検出地域</span><span><i class="legend-past"></i>過去の震源</span></div>
+        <div class="map-controls" aria-label="地図操作">
+          <button id="map-zoom-in" type="button" aria-label="地図を拡大" title="拡大">＋</button>
+          <button id="map-zoom-out" type="button" aria-label="地図を縮小" title="縮小">−</button>
+          <button id="map-reset" type="button" aria-label="日本全国を表示" title="全国">全国</button>
+        </div>
         <svg id="japan-map" class="japan-map" viewBox="0 0 800 800" role="img" aria-label="日本の都道府県地図と最近の震源位置">
           <image href="${japanMapUrl}" width="800" height="800" />
           <g id="eew-prefecture-overlays" class="eew-prefecture-overlays" aria-label="EEW予測震度" />
@@ -216,6 +223,9 @@ const historicalEarthquakeMarkers = document.querySelector<SVGGElement>('#histor
 const latestEarthquakeMarker = document.querySelector<SVGGElement>('#latest-earthquake-marker')!;
 const eewMarker = document.querySelector<SVGGElement>('#eew-marker')!;
 const mapStatus = document.querySelector<HTMLParagraphElement>('#map-status')!;
+const mapZoomIn = document.querySelector<HTMLButtonElement>('#map-zoom-in')!;
+const mapZoomOut = document.querySelector<HTMLButtonElement>('#map-zoom-out')!;
+const mapReset = document.querySelector<HTMLButtonElement>('#map-reset')!;
 const connectionStatus = document.querySelector<HTMLDivElement>('#connection-status')!;
 const connectionLabel = document.querySelector<HTMLSpanElement>('#connection-label')!;
 const shakeStatus = document.querySelector<HTMLDivElement>('#shake-status')!;
@@ -256,6 +266,27 @@ let activeEew: StoredEew | null = null;
 let eewCancelledMessageVisible = false;
 let eewTimer: number | undefined;
 const lifecycle = new AbortController();
+interface MapViewBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface MapDragState {
+  pointerId: number;
+  lastClientX: number;
+  lastClientY: number;
+  pendingClientX: number;
+  pendingClientY: number;
+  moved: boolean;
+}
+
+let mapManualOverride = false;
+let suppressedEewEventId: string | null = null;
+let suppressedShakeEventId: string | null = null;
+let mapDragState: MapDragState | null = null;
+let mapDragFrame: number | undefined;
 type TestFixturesModule = typeof import('./testFixtures/fixtures');
 let testFixtures: TestFixturesModule | null = null;
 let testEarthquakeSequence = 0;
@@ -304,8 +335,114 @@ function clearTestLogs(): void {
   testLogCount.textContent = '0 / 50';
 }
 
+function readMapViewBox(): MapViewBox {
+  const values = japanMap.getAttribute('viewBox')?.trim().split(/\s+/).map(Number) ?? [];
+  if (values.length === 4 && values.every(Number.isFinite)) {
+    return { x: values[0], y: values[1], width: values[2], height: values[3] };
+  }
+  return { ...MAP_VIEWBOX };
+}
+
+function clampMapViewBox(viewBox: MapViewBox): MapViewBox {
+  const minimumWidth = MAP_VIEWBOX.width / MAX_MAP_ZOOM;
+  const minimumHeight = MAP_VIEWBOX.height / MAX_MAP_ZOOM;
+  const width = Math.min(MAP_VIEWBOX.width, Math.max(minimumWidth, Number.isFinite(viewBox.width) ? viewBox.width : MAP_VIEWBOX.width));
+  const height = Math.min(MAP_VIEWBOX.height, Math.max(minimumHeight, Number.isFinite(viewBox.height) ? viewBox.height : MAP_VIEWBOX.height));
+  const x = Math.min(
+    MAP_VIEWBOX.x + MAP_VIEWBOX.width - width,
+    Math.max(MAP_VIEWBOX.x, Number.isFinite(viewBox.x) ? viewBox.x : MAP_VIEWBOX.x),
+  );
+  const y = Math.min(
+    MAP_VIEWBOX.y + MAP_VIEWBOX.height - height,
+    Math.max(MAP_VIEWBOX.y, Number.isFinite(viewBox.y) ? viewBox.y : MAP_VIEWBOX.y),
+  );
+  return { x, y, width, height };
+}
+
+function setMapViewBox(viewBox: MapViewBox): void {
+  const clamped = clampMapViewBox(viewBox);
+  japanMap.setAttribute('viewBox', `${clamped.x.toFixed(2)} ${clamped.y.toFixed(2)} ${clamped.width.toFixed(2)} ${clamped.height.toFixed(2)}`);
+}
+
 function resetMapView(): void {
-  japanMap.setAttribute('viewBox', `${MAP_VIEWBOX.x} ${MAP_VIEWBOX.y} ${MAP_VIEWBOX.width} ${MAP_VIEWBOX.height}`);
+  setMapViewBox(MAP_VIEWBOX);
+}
+
+function markMapUserInteraction(): void {
+  mapManualOverride = true;
+  if (activeEewEventId) suppressedEewEventId = activeEewEventId;
+  if (currentShakeDetection) suppressedShakeEventId = currentShakeDetection.startedAt;
+}
+
+function markMapAutoFocusApplied(kind: 'eew' | 'shake'): void {
+  mapManualOverride = false;
+  if (kind === 'eew') suppressedEewEventId = null;
+  else suppressedShakeEventId = null;
+}
+
+function screenPointToMap(clientX: number, clientY: number): { x: number; y: number } | null {
+  const matrix = japanMap.getScreenCTM();
+  if (matrix) {
+    try {
+      const point = japanMap.createSVGPoint();
+      point.x = clientX;
+      point.y = clientY;
+      const mapped = point.matrixTransform(matrix.inverse());
+      if (Number.isFinite(mapped.x) && Number.isFinite(mapped.y)) return { x: mapped.x, y: mapped.y };
+    } catch {
+      // Use the bounding rectangle fallback below when a browser cannot invert the matrix.
+    }
+  }
+
+  const rect = japanMap.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  const viewBox = readMapViewBox();
+  return {
+    x: viewBox.x + ((clientX - rect.left) / rect.width) * viewBox.width,
+    y: viewBox.y + ((clientY - rect.top) / rect.height) * viewBox.height,
+  };
+}
+
+function viewBoxDeltaFromPixels(deltaX: number, deltaY: number): { x: number; y: number } {
+  const rect = japanMap.getBoundingClientRect();
+  const viewBox = readMapViewBox();
+  if (rect.width <= 0 || rect.height <= 0) return { x: 0, y: 0 };
+  return {
+    x: (deltaX / rect.width) * viewBox.width,
+    y: (deltaY / rect.height) * viewBox.height,
+  };
+}
+
+function zoomMapAt(clientX: number | null, clientY: number | null, factor: number): void {
+  const current = readMapViewBox();
+  const anchor = clientX === null || clientY === null
+    ? { x: current.x + current.width / 2, y: current.y + current.height / 2 }
+    : screenPointToMap(clientX, clientY) ?? { x: current.x + current.width / 2, y: current.y + current.height / 2 };
+  const nextWidth = current.width * factor;
+  const nextHeight = current.height * factor;
+  const relativeX = (anchor.x - current.x) / current.width;
+  const relativeY = (anchor.y - current.y) / current.height;
+  setMapViewBox({
+    x: anchor.x - relativeX * nextWidth,
+    y: anchor.y - relativeY * nextHeight,
+    width: nextWidth,
+    height: nextHeight,
+  });
+}
+
+function zoomMapByFactor(factor: number, clientX: number | null = null, clientY: number | null = null): void {
+  markMapUserInteraction();
+  zoomMapAt(clientX, clientY, factor);
+}
+
+function resetMapToNation(): void {
+  // 全国表示は現在イベントへの手動フォーカスを解除する操作です。
+  // ただし、同じEEW/揺れ検出の続報で直ちに戻さないよう、現在の
+  // イベントだけを抑制し、新しいイベントでは自動フォーカスを許可します。
+  if (activeEewEventId) suppressedEewEventId = activeEewEventId;
+  if (currentShakeDetection) suppressedShakeEventId = currentShakeDetection.startedAt;
+  mapManualOverride = false;
+  resetMapView();
 }
 
 function highConfidenceAreas(detection: ShakeDetection | null): Array<{ area: EpspArea; confidence: number }> {
@@ -329,7 +466,7 @@ function focusMapOnPoints(points: Array<{ x: number; y: number }>, padding: numb
   const height = Math.min(MAP_VIEWBOX.height, Math.max(minimumSize, maxY - minY + padding * 2));
   const x = Math.max(MAP_VIEWBOX.x, Math.min(MAP_VIEWBOX.width - width, (minX + maxX - width) / 2));
   const y = Math.max(MAP_VIEWBOX.y, Math.min(MAP_VIEWBOX.height - height, (minY + maxY - height) / 2));
-  japanMap.setAttribute('viewBox', `${x.toFixed(2)} ${y.toFixed(2)} ${width.toFixed(2)} ${height.toFixed(2)}`);
+  setMapViewBox({ x, y, width, height });
   return true;
 }
 
@@ -392,7 +529,7 @@ function clearShakeDetection(): void {
   shakeDetectionTimer = undefined;
   currentShakeDetection = null;
   lastFocusedShakeEvent = null;
-  resetMapView();
+  if (!mapManualOverride) resetMapView();
   renderShakeDetection();
 }
 
@@ -402,7 +539,7 @@ function scheduleShakeDetectionExpiry(): void {
     shakeDetectionTimer = undefined;
     currentShakeDetection = null;
     lastFocusedShakeEvent = null;
-    resetMapView();
+    if (!mapManualOverride) resetMapView();
     renderShakeDetection();
   }, DETECTION_TIMEOUT_MS);
 }
@@ -413,10 +550,21 @@ function updateShakeDetection(detection: ShakeDetection): void {
     return;
   }
 
+  const isNewDetectionEvent = currentShakeDetection?.startedAt !== detection.startedAt;
   currentShakeDetection = detection;
   const areas = highConfidenceAreas(detection);
-  if (!activeEew && settings.autoFocusEnabled && areas.length > 0 && lastFocusedShakeEvent !== detection.startedAt) {
-    if (focusMapOnAreas(areas)) lastFocusedShakeEvent = detection.startedAt;
+  if (
+    !activeEew &&
+    settings.autoFocusEnabled &&
+    areas.length > 0 &&
+    isNewDetectionEvent &&
+    lastFocusedShakeEvent !== detection.startedAt &&
+    suppressedShakeEventId !== detection.startedAt
+  ) {
+    if (focusMapOnAreas(areas)) {
+      lastFocusedShakeEvent = detection.startedAt;
+      markMapAutoFocusApplied('shake');
+    }
   }
   renderShakeDetection();
   scheduleShakeDetectionExpiry();
@@ -430,17 +578,26 @@ function applySettings(): void {
   if (!settings.shakeDetectionEnabled) clearShakeDetection();
   else if (!settings.autoFocusEnabled) {
     lastFocusedShakeEvent = null;
-    resetMapView();
+    if (!mapManualOverride) resetMapView();
   }
   else if (currentShakeDetection) {
     const areas = highConfidenceAreas(currentShakeDetection);
-    if (areas.length > 0 && lastFocusedShakeEvent !== currentShakeDetection.startedAt && focusMapOnAreas(areas)) {
+    if (
+      !activeEew &&
+      areas.length > 0 &&
+      lastFocusedShakeEvent !== currentShakeDetection.startedAt &&
+      suppressedShakeEventId !== currentShakeDetection.startedAt &&
+      focusMapOnAreas(areas)
+    ) {
       lastFocusedShakeEvent = currentShakeDetection.startedAt;
+      markMapAutoFocusApplied('shake');
     }
   }
   if (!settings.eewEnabled && (activeEew !== null || eewCancelledMessageVisible || eewByEventId.size > 0)) clearEewState();
   else if (!settings.eewAutoFocusEnabled) restoreSecondaryFocus();
-  else if (activeEew) focusMapOnEew(activeEew);
+  else if (activeEew && !mapManualOverride && suppressedEewEventId !== activeEew.issue.eventId && focusMapOnEew(activeEew)) {
+    markMapAutoFocusApplied('eew');
+  }
   renderShakeDetection();
   saveSettings();
 }
@@ -683,10 +840,12 @@ function pruneEewEvents(): void {
 }
 
 function restoreSecondaryFocus(): void {
+  if (mapManualOverride) return;
   if (currentShakeDetection && settings.shakeDetectionEnabled && settings.autoFocusEnabled) {
     const areas = highConfidenceAreas(currentShakeDetection);
-    if (areas.length > 0 && focusMapOnAreas(areas)) {
+    if (areas.length > 0 && suppressedShakeEventId !== currentShakeDetection.startedAt && focusMapOnAreas(areas)) {
       lastFocusedShakeEvent = currentShakeDetection.startedAt;
+      markMapAutoFocusApplied('shake');
       return;
     }
   }
@@ -739,7 +898,14 @@ function updateEew(eew: EewMessage): EewUpdateResult {
   activeEewEventId = eew.issue.eventId;
   activeEew = record;
   eewCancelledMessageVisible = false;
-  if (isNewEvent && settings.eewAutoFocusEnabled) focusMapOnEew(eew);
+  if (
+    isNewEvent &&
+    settings.eewAutoFocusEnabled &&
+    suppressedEewEventId !== eew.issue.eventId &&
+    focusMapOnEew(eew)
+  ) {
+    markMapAutoFocusApplied('eew');
+  }
   renderEewPrefectureOverlays(eew);
   renderEewMarker(eew);
   renderEewPanel(eew);
@@ -923,6 +1089,91 @@ function updateTimestamp(prefix = '最終更新'): void {
   updatedAt.textContent = `${prefix} ${new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
 }
 
+function flushMapDrag(): void {
+  if (!mapDragState) return;
+  const delta = viewBoxDeltaFromPixels(mapDragState.pendingClientX, mapDragState.pendingClientY);
+  mapDragState.pendingClientX = 0;
+  mapDragState.pendingClientY = 0;
+  if (delta.x === 0 && delta.y === 0) return;
+  const current = readMapViewBox();
+  setMapViewBox({ x: current.x - delta.x, y: current.y - delta.y, width: current.width, height: current.height });
+}
+
+function scheduleMapDragFrame(): void {
+  if (mapDragFrame !== undefined) return;
+  mapDragFrame = window.requestAnimationFrame(() => {
+    mapDragFrame = undefined;
+    flushMapDrag();
+  });
+}
+
+function finishMapDrag(event?: PointerEvent): void {
+  const state = mapDragState;
+  if (!state || (event && event.pointerId !== state.pointerId)) return;
+  if (mapDragFrame !== undefined) {
+    window.cancelAnimationFrame(mapDragFrame);
+    mapDragFrame = undefined;
+  }
+  flushMapDrag();
+  try {
+    if (japanMap.hasPointerCapture(state.pointerId)) japanMap.releasePointerCapture(state.pointerId);
+  } catch {
+    // Pointer capture can already be released by the browser on cancellation.
+  }
+  mapDragState = null;
+  japanMap.classList.remove('is-dragging');
+}
+
+function handleMapPointerDown(event: PointerEvent): void {
+  if (event.pointerType === 'mouse' && event.button !== 0) return;
+  if (mapDragState) return;
+  mapDragState = {
+    pointerId: event.pointerId,
+    lastClientX: event.clientX,
+    lastClientY: event.clientY,
+    pendingClientX: 0,
+    pendingClientY: 0,
+    moved: false,
+  };
+  japanMap.classList.add('is-dragging');
+  event.preventDefault();
+  try {
+    japanMap.setPointerCapture(event.pointerId);
+  } catch {
+    // Pointer capture is optional; pointer events still work without it.
+  }
+}
+
+function handleMapPointerMove(event: PointerEvent): void {
+  const state = mapDragState;
+  if (!state || event.pointerId !== state.pointerId) return;
+  const deltaX = event.clientX - state.lastClientX;
+  const deltaY = event.clientY - state.lastClientY;
+  state.lastClientX = event.clientX;
+  state.lastClientY = event.clientY;
+  state.pendingClientX += deltaX;
+  state.pendingClientY += deltaY;
+  if (!state.moved && Math.hypot(state.pendingClientX, state.pendingClientY) >= 2) {
+    state.moved = true;
+    markMapUserInteraction();
+  }
+  if (!state.moved) return;
+  event.preventDefault();
+  scheduleMapDragFrame();
+}
+
+mapZoomIn.addEventListener('click', () => zoomMapByFactor(1 / MAP_ZOOM_FACTOR), { signal: lifecycle.signal });
+mapZoomOut.addEventListener('click', () => zoomMapByFactor(MAP_ZOOM_FACTOR), { signal: lifecycle.signal });
+mapReset.addEventListener('click', resetMapToNation, { signal: lifecycle.signal });
+japanMap.addEventListener('pointerdown', handleMapPointerDown, { signal: lifecycle.signal });
+japanMap.addEventListener('pointermove', handleMapPointerMove, { signal: lifecycle.signal });
+japanMap.addEventListener('pointerup', finishMapDrag, { signal: lifecycle.signal });
+japanMap.addEventListener('pointercancel', finishMapDrag, { signal: lifecycle.signal });
+japanMap.addEventListener('wheel', (event) => {
+  event.preventDefault();
+  zoomMapByFactor(event.deltaY < 0 ? 1 / MAP_ZOOM_FACTOR : MAP_ZOOM_FACTOR, event.clientX, event.clientY);
+}, { passive: false, signal: lifecycle.signal });
+
 applySettings();
 
 settingsToggle.addEventListener('click', () => {
@@ -993,6 +1244,9 @@ function resetTestState(): void {
   selectedEarthquakeId = null;
   connectionEstablished = false;
   reconnectAttempt = 0;
+  mapManualOverride = false;
+  suppressedEewEventId = null;
+  suppressedShakeEventId = null;
   store.clear();
   clearShakeDetection();
   clearEewState();
@@ -1072,6 +1326,12 @@ list.addEventListener('click', (event) => {
   selectedEarthquakeId = id;
   renderMarkers(store.recent);
   renderList(store.recent);
+  const selected = store.recent.find((quake) => quake.id === id);
+  const point = selected ? projectEpicenter(selected) : null;
+  if (point) {
+    markMapUserInteraction();
+    focusMapOnPoints([point], 145, 260);
+  }
 }, { signal: lifecycle.signal });
 
 function escapeHtml(value: string): string {
@@ -1278,6 +1538,10 @@ window.addEventListener('pagehide', () => {
   reconnectTimer = undefined;
   if (shakeDetectionTimer !== undefined) window.clearTimeout(shakeDetectionTimer);
   shakeDetectionTimer = undefined;
+  if (mapDragFrame !== undefined) window.cancelAnimationFrame(mapDragFrame);
+  mapDragFrame = undefined;
+  mapDragState = null;
+  japanMap.classList.remove('is-dragging');
   clearEewTimer();
   eewByEventId.clear();
   activeEew = null;

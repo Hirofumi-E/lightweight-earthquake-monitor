@@ -114,7 +114,8 @@ button { color: inherit; font: inherit; }
 .list-loading, .empty-state { min-height: 100px; display: flex; align-items: center; justify-content: center; gap: 9px; padding: 16px; color: var(--muted); font-size: 12px; text-align: center; }
 
 .map-panel { position: relative; min-width: 0; min-height: 0; display: grid; place-items: center; overflow: hidden; background: var(--map-sea); }
-.japan-map { display: block; width: 100%; height: 100%; max-width: 100%; max-height: 100%; }
+.japan-map { display: block; width: 100%; height: 100%; max-width: 100%; max-height: 100%; cursor: grab; touch-action: none; user-select: none; }
+.japan-map.is-dragging { cursor: grabbing; }
 .eew-prefecture-overlays { pointer-events: none; }
 .eew-prefecture { pointer-events: none; }
 .earthquake-markers { overflow: visible; }
@@ -125,10 +126,14 @@ button { color: inherit; font: inherit; }
 .map-legend .legend-eew { background: #f3c36e; box-shadow: 0 0 0 3px #f3c36e33; }
 .map-legend .legend-detection { background: #e2aa61; box-shadow: 0 0 0 3px #e2aa6133; }
 .map-legend .legend-past { background: #82b5d7; opacity: .75; }
+.map-controls { position: absolute; z-index: 2; top: 16px; right: 18px; display: flex; gap: 4px; }
+.map-controls button { min-width: 29px; height: 27px; padding: 0 7px; border: 1px solid #3c596b; border-radius: 3px; background: #12212dcc; color: #d3e1ea; font-size: 14px; line-height: 1; cursor: pointer; }
+.map-controls button:hover, .map-controls button:focus-visible { border-color: #82abc3; background: #1b3444ee; color: #f1f7fb; outline: none; }
+.map-controls button:last-child { font-size: 10px; }
 .map-attribution { position: absolute; right: 15px; bottom: 8px; margin: 0; color: #82909b; font-size: 9px; text-align: right; pointer-events: none; }
 .map-status { position: absolute; left: 15px; bottom: 8px; margin: 0; color: #aab7c1; font-size: 10px; pointer-events: none; }
 
-.test-panel { position: absolute; z-index: 3; top: 53px; right: 18px; width: min(440px, calc(100% - 36px)); max-height: calc(100% - 71px); min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "heading" "controls" "log"; gap: 10px; overflow: auto; padding: 12px 13px 11px; border: 1px solid #81554b; border-radius: 6px; background: #211719f2; box-shadow: 0 14px 32px #0009; }
+.test-panel { position: absolute; z-index: 3; top: 53px; right: 18px; width: min(440px, calc(100% - 36px)); max-height: min(72%, 560px); min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "heading" "controls" "log"; gap: 10px; overflow: auto; padding: 12px 13px 11px; border: 1px solid #81554b; border-radius: 6px; background: #211719f2; box-shadow: 0 14px 32px #0009; }
 .test-panel-heading { grid-area: heading; display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid #5b3d38; }
 .test-panel-heading strong { color: #f2b69f; font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .06em; }
 .test-panel-heading small { display: block; margin-top: 3px; color: #ae8175; font-size: 9px; }
@@ -205,9 +210,10 @@ button.retry-button { padding: 5px 9px; border: 1px solid #704d45; border-radius
   .quake-row { padding-left: 17px; }
   .japan-map { width: min(100%, calc(56dvh * 1.12)); height: 100%; }
   .map-legend { top: 10px; left: 11px; gap: 10px; font-size: 10px; }
+  .map-controls { top: 10px; right: 10px; }
   .map-attribution { right: 9px; bottom: 5px; max-width: calc(100% - 18px); font-size: 8px; }
   .map-status { left: 9px; bottom: 22px; max-width: calc(100% - 18px); font-size: 9px; }
-  .test-panel { top: 42px; right: 10px; width: calc(100% - 20px); max-height: calc(100% - 53px); }
+  .test-panel { top: 42px; right: 10px; width: calc(100% - 20px); max-height: min(80%, 420px); }
 }
 
 @media (max-width: 420px) {

@@ -69,6 +69,7 @@ python3 scripts/generate-japan-map.py /path/to/20190125_AreaInformationPrefectur
 - 最近の地震情報10件を縦リスト表示
 - 地震履歴の選択による震源マーカーの強調
 - 都道府県境界を含むローカルSVG日本地図と、直近10件の震源表示
+- SVGのviewBoxを使った地図のドラッグ移動、ホイール・ボタンによるズーム、全国表示への復帰
 - 起動時のHTTP履歴取得とWebSocketによるリアルタイム更新
 - WebSocketの自動再接続、再接続後のHTTP履歴補完、接続状態表示
 - 動作設定のlocalStorage保存（揺れ検出・自動フォーカス）
