@@ -20,7 +20,9 @@ const EEW_TIMEOUT_MS = 120_000;
 const EEW_CANCEL_DISPLAY_MS = 5_000;
 const MAX_EEW_EVENTS = 4;
 const EEW_SCALE_CODES = new Set([0, 10, 20, 30, 40, 45, 50, 55, 60, 70, 99]);
-const isEewSandbox = new URLSearchParams(window.location.search).get('eewSandbox') === '1';
+const queryParameters = new URLSearchParams(window.location.search);
+const isTestMode = queryParameters.get('testMode') === '1';
+const isEewSandbox = !isTestMode && queryParameters.get('eewSandbox') === '1';
 const websocketUrl = isEewSandbox ? 'wss://api-realtime-sandbox.p2pquake.net/v2/ws' : 'wss://api.p2pquake.net/v2/ws';
 
 const PREFECTURE_NAMES = [
@@ -52,10 +54,11 @@ const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('アプリの表示領域が見つかりません');
 
 app.innerHTML = `
-  <div class="shell">
+  <div class="shell${isTestMode ? ' is-test-mode' : ''}">
     <header class="topbar">
       <h1 class="brand">Lightweight Earthquake Monitor</h1>
-      <div id="sandbox-banner" class="sandbox-banner" ${isEewSandbox ? '' : 'hidden'} role="status"><strong>SANDBOX</strong><span>過去の情報を再生中</span></div>
+      ${isTestMode ? '<div class="test-mode-banner" role="status"><strong>TEST MODE</strong><span>疑似データによる動作確認</span></div>' : ''}
+      ${isEewSandbox ? '<div id="sandbox-banner" class="sandbox-banner" role="status"><strong>SANDBOX</strong><span>過去の情報を再生中</span></div>' : ''}
       <div class="header-actions">
         <div id="shake-status" class="shake-status" role="status" aria-live="polite" hidden>
           <span class="shake-status-label">揺れを検出しています</span>
@@ -141,6 +144,39 @@ app.innerHTML = `
         <p id="map-status" class="map-status">地震情報を取得しています</p>
       </section>
     </div>
+    ${isTestMode ? `
+    <section id="test-panel" class="test-panel" aria-label="TEST PANEL">
+      <div class="test-panel-heading">
+        <div><strong>TEST PANEL</strong><small>固定fixtureによる疑似データ</small></div>
+        <span>本番データ未接続</span>
+      </div>
+      <div class="test-controls">
+        <div class="test-control-group" aria-label="地震・揺れ検出テスト">
+          <button type="button" data-test-action="quake">通常地震を発生</button>
+          <button type="button" data-test-action="shake-start">揺れ検出を開始</button>
+          <button type="button" data-test-action="shake-update">揺れ検出を更新</button>
+          <button type="button" data-test-action="shake-end">揺れ検出を終了</button>
+        </div>
+        <div class="test-control-group" aria-label="EEWテスト">
+          <button type="button" data-test-action="eew-1">EEW 第1報</button>
+          <button type="button" data-test-action="eew-2">EEW 第2報</button>
+          <button type="button" data-test-action="eew-3">EEW 第3報</button>
+          <button type="button" data-test-action="eew-old">古いEEW報</button>
+          <button type="button" data-test-action="eew-missing">EEW震源欠損</button>
+          <button type="button" data-test-action="eew-cancel">EEW取消</button>
+        </div>
+        <div class="test-control-group" aria-label="接続状態テスト">
+          <button type="button" data-test-action="connection-live">LIVE</button>
+          <button type="button" data-test-action="connection-reconnecting">RECONNECTING</button>
+          <button type="button" data-test-action="connection-offline">OFFLINE</button>
+        </div>
+        <button type="button" class="test-reset-button" data-test-action="reset">全状態リセット</button>
+      </div>
+      <div class="test-log" aria-label="テストイベントログ">
+        <div class="test-log-heading"><strong>イベントログ</strong><span id="test-log-count">0 / 50</span></div>
+        <ol id="test-log-list"><li>fixtureを読み込んでいます</li></ol>
+      </div>
+    </section>` : ''}
   </div>`;
 
 const latestCard = document.querySelector<HTMLElement>('#latest-card')!;
@@ -184,6 +220,9 @@ const shakeDetectionToggle = document.querySelector<HTMLInputElement>('#shake-de
 const autoFocusToggle = document.querySelector<HTMLInputElement>('#auto-focus-toggle')!;
 const eewToggle = document.querySelector<HTMLInputElement>('#eew-toggle')!;
 const eewAutoFocusToggle = document.querySelector<HTMLInputElement>('#eew-auto-focus-toggle')!;
+const testPanel = document.querySelector<HTMLElement>('#test-panel');
+const testLogList = document.querySelector<HTMLOListElement>('#test-log-list');
+const testLogCount = document.querySelector<HTMLSpanElement>('#test-log-count');
 const store = new EarthquakeStore();
 let hasLoaded = false;
 let disposed = false;
@@ -209,6 +248,10 @@ let activeEew: StoredEew | null = null;
 let eewCancelledMessageVisible = false;
 let eewTimer: number | undefined;
 const lifecycle = new AbortController();
+type TestFixturesModule = typeof import('./testFixtures/fixtures');
+let testFixtures: TestFixturesModule | null = null;
+let testEarthquakeSequence = 0;
+const testLogs: string[] = [];
 
 function readSettings(): MonitorSettings {
   try {
@@ -231,6 +274,26 @@ function saveSettings(): void {
   } catch {
     // 設定を保存できない環境でも、現在のページ内では機能を継続します。
   }
+}
+
+function addTestLog(message: string): void {
+  if (!isTestMode || !testLogList || !testLogCount) return;
+  const time = new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date());
+  testLogs.push(`${time} ${message}`);
+  if (testLogs.length > 50) testLogs.splice(0, testLogs.length - 50);
+  testLogList.replaceChildren(...testLogs.map((entry) => {
+    const item = document.createElement('li');
+    item.textContent = entry;
+    return item;
+  }));
+  testLogCount.textContent = `${testLogs.length} / 50`;
+}
+
+function clearTestLogs(): void {
+  if (!isTestMode || !testLogList || !testLogCount) return;
+  testLogs.length = 0;
+  testLogList.replaceChildren();
+  testLogCount.textContent = '0 / 50';
 }
 
 function resetMapView(): void {
@@ -635,13 +698,16 @@ function clearEewState(): void {
   if (hasLoaded) renderMarkers(store.recent);
 }
 
-function updateEew(eew: EewMessage): void {
-  if (!settings.eewEnabled) return;
+type EewUpdateResult = 'disabled' | 'ignored-old' | 'duplicate' | 'ignored-cancelled' | 'cancelled' | 'updated';
+
+function updateEew(eew: EewMessage): EewUpdateResult {
+  if (!settings.eewEnabled) return 'disabled';
   const existing = eewByEventId.get(eew.issue.eventId);
   const isNewEvent = existing === undefined;
   if (existing) {
     const serialOrder = compareEewSerial(eew.issue.serial, existing.issue.serial);
-    if (serialOrder < 0 || (serialOrder === 0 && eew.id === existing.id)) return;
+    if (serialOrder < 0) return 'ignored-old';
+    if (serialOrder === 0 && eew.id === existing.id) return 'duplicate';
   }
 
   const record: StoredEew = { ...eew, receivedAt: Date.now() };
@@ -649,7 +715,7 @@ function updateEew(eew: EewMessage): void {
   pruneEewEvents();
 
   if (eew.cancelled) {
-    if (activeEewEventId !== eew.issue.eventId) return;
+    if (activeEewEventId !== eew.issue.eventId) return 'ignored-cancelled';
     activeEewEventId = null;
     activeEew = null;
     eewCancelledMessageVisible = true;
@@ -659,7 +725,7 @@ function updateEew(eew: EewMessage): void {
     restoreSecondaryFocus();
     renderMarkers(store.recent);
     scheduleEewCancellationClear();
-    return;
+    return 'cancelled';
   }
 
   activeEewEventId = eew.issue.eventId;
@@ -670,6 +736,7 @@ function updateEew(eew: EewMessage): void {
   renderEewMarker(eew);
   renderEewPanel(eew);
   scheduleEewExpiry(eew.issue.eventId, eew.issue.serial);
+  return 'updated';
 }
 
 function formatTime(value: string): string {
@@ -876,6 +943,94 @@ eewAutoFocusToggle.addEventListener('change', () => {
   applySettings();
 }, { signal: lifecycle.signal });
 
+const testConnectionAdapter = {
+  setState(state: 'live' | 'reconnecting' | 'offline'): void {
+    setConnectionState(state);
+    addTestLog(`connection state: ${state.toUpperCase()}`);
+  },
+};
+
+function setTestControlsEnabled(enabled: boolean): void {
+  testPanel?.querySelectorAll<HTMLButtonElement>('[data-test-action]').forEach((button) => {
+    button.disabled = !enabled;
+  });
+}
+
+function resetTestState(): void {
+  testEarthquakeSequence = 0;
+  selectedEarthquakeId = null;
+  connectionEstablished = false;
+  reconnectAttempt = 0;
+  store.clear();
+  clearShakeDetection();
+  clearEewState();
+  resetMapView();
+  renderAll();
+  updateTimestamp('テストリセット');
+  setConnectionState('offline');
+  clearTestLogs();
+  addTestLog('全状態リセット');
+}
+
+function runTestAction(action: string): void {
+  if (!isTestMode || !testFixtures) return;
+
+  switch (action) {
+    case 'quake':
+      testEarthquakeSequence += 1;
+      handleIncomingPayload(testFixtures.createTestEarthquake(testEarthquakeSequence), 'test');
+      break;
+    case 'shake-start':
+      handleIncomingPayload(testFixtures.testShakeStart, 'test');
+      break;
+    case 'shake-update':
+      handleIncomingPayload(testFixtures.testShakeUpdate, 'test');
+      break;
+    case 'shake-end':
+      handleIncomingPayload(testFixtures.testShakeEnd, 'test');
+      break;
+    case 'eew-1':
+      handleIncomingPayload(testFixtures.testEewReport1, 'test');
+      break;
+    case 'eew-2':
+      handleIncomingPayload(testFixtures.testEewReport2, 'test');
+      break;
+    case 'eew-3':
+      handleIncomingPayload(testFixtures.testEewReport3, 'test');
+      break;
+    case 'eew-old':
+      handleIncomingPayload(testFixtures.testEewOldReport1, 'test');
+      break;
+    case 'eew-missing':
+      handleIncomingPayload(testFixtures.testEewMissingEarthquake, 'test');
+      break;
+    case 'eew-cancel':
+      handleIncomingPayload(testFixtures.testEewCancelled, 'test');
+      break;
+    case 'connection-live':
+      testConnectionAdapter.setState('live');
+      break;
+    case 'connection-reconnecting':
+      testConnectionAdapter.setState('reconnecting');
+      break;
+    case 'connection-offline':
+      testConnectionAdapter.setState('offline');
+      break;
+    case 'reset':
+      resetTestState();
+      break;
+    default:
+      break;
+  }
+}
+
+testPanel?.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  const button = target.closest<HTMLButtonElement>('[data-test-action]');
+  if (button?.dataset.testAction) runTestAction(button.dataset.testAction);
+}, { signal: lifecycle.signal });
+
 list.addEventListener('click', (event) => {
   const target = event.target;
   if (!(target instanceof Element)) return;
@@ -941,6 +1096,57 @@ async function loadHistory(reason: 'startup' | 'retry' | 'reconnect'): Promise<v
   }
 }
 
+type IncomingPayloadSource = 'websocket' | 'test';
+
+function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource = 'websocket'): void {
+  const parsedEew = parseEew(payload);
+  if (parsedEew) {
+    const result = updateEew(parsedEew);
+    if (source === 'test') {
+      if (result === 'ignored-old') addTestLog(`ignored old serial ${parsedEew.issue.serial} (eventId ${parsedEew.issue.eventId})`);
+      else if (result === 'duplicate') addTestLog(`duplicate EEW id ${parsedEew.id}`);
+      else if (result === 'cancelled') addTestLog(`EEW cancelled (eventId ${parsedEew.issue.eventId})`);
+      else if (result === 'ignored-cancelled') addTestLog(`ignored cancelled EEW (eventId ${parsedEew.issue.eventId})`);
+      else if (result === 'disabled') addTestLog('EEW display is OFF; payload ignored');
+      else addTestLog(`EEW eventId ${parsedEew.issue.eventId} serial ${parsedEew.issue.serial}`);
+    }
+    return;
+  }
+
+  // 554 only signals that an EEW publication was detected. It is not an EEW payload.
+  if (parseEewDetection(payload)) {
+    if (source === 'test') addTestLog('554 EEW publication detected (display not started)');
+    return;
+  }
+
+  const parsedShakeDetection = parseShakeDetection(payload);
+  if (parsedShakeDetection) {
+    updateShakeDetection(parsedShakeDetection);
+    if (source === 'test') {
+      const state = parsedShakeDetection.count > 0 && parsedShakeDetection.confidence > 0 ? 'updated' : 'ended';
+      addTestLog(`9611 ${state}: count ${parsedShakeDetection.count}, confidence ${parsedShakeDetection.confidence}`);
+    }
+    return;
+  }
+
+  // 561 is an individual user sensing message. It is parsed for protocol
+  // compatibility, but never becomes a detection trigger by itself.
+  if (parseUserquake(payload)) {
+    if (source === 'test') addTestLog('561 individual sensing received (display not started)');
+    return;
+  }
+
+  const earthquake = parseEarthquake(payload);
+  if (!earthquake) return;
+  if (!store.merge([earthquake])) {
+    if (source === 'test') addTestLog(`551 duplicate ignored: ${earthquake.id}`);
+    return;
+  }
+  renderAll(true);
+  updateTimestamp(source === 'test' ? 'テスト受信' : '最終受信');
+  if (source === 'test') addTestLog(`551 earthquake ${earthquake.id}`);
+}
+
 function scheduleReconnect(): void {
   if (disposed || reconnectTimer !== undefined) return;
   setConnectionState(connectionEstablished ? 'reconnecting' : 'offline');
@@ -982,29 +1188,7 @@ function connectWebSocket(): void {
       return;
     }
 
-    const parsedEew = parseEew(payload);
-    if (parsedEew) {
-      updateEew(parsedEew);
-      return;
-    }
-
-    // 554 only signals that an EEW publication was detected. It is not an EEW payload.
-    if (parseEewDetection(payload)) return;
-
-    const parsedShakeDetection = parseShakeDetection(payload);
-    if (parsedShakeDetection) {
-      updateShakeDetection(parsedShakeDetection);
-      return;
-    }
-
-    // 561 is an individual user sensing message. It is parsed for protocol
-    // compatibility, but never becomes a detection trigger by itself.
-    if (parseUserquake(payload)) return;
-
-    const earthquake = parseEarthquake(payload);
-    if (!earthquake || !store.merge([earthquake])) return;
-    renderAll(true);
-    updateTimestamp('最終受信');
+    handleIncomingPayload(payload);
   };
 
   connection.onerror = () => {
@@ -1020,6 +1204,21 @@ function connectWebSocket(): void {
     }
     scheduleReconnect();
   };
+}
+
+async function initializeTestMode(): Promise<void> {
+  setConnectionState('offline');
+  renderAll();
+  updateTimestamp('テスト待機');
+  setTestControlsEnabled(false);
+  try {
+    testFixtures = await import('./testFixtures/fixtures');
+    setTestControlsEnabled(true);
+    clearTestLogs();
+    addTestLog('TEST MODE ready: 疑似データのみ');
+  } catch {
+    addTestLog('fixtureの読み込みに失敗しました');
+  }
 }
 
 window.addEventListener('pagehide', () => {
@@ -1046,6 +1245,10 @@ window.addEventListener('pagehide', () => {
   setConnectionState('offline');
 }, { once: true, signal: lifecycle.signal });
 
-void loadHistory('startup').finally(() => {
-  if (!disposed) connectWebSocket();
-});
+if (isTestMode) {
+  void initializeTestMode();
+} else {
+  void loadHistory('startup').finally(() => {
+    if (!disposed) connectWebSocket();
+  });
+}

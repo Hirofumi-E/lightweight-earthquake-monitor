@@ -12,6 +12,12 @@ export class EarthquakeStore {
     return this.earthquakes;
   }
 
+  clear(): void {
+    this.earthquakes = [];
+    this.seenIds.clear();
+    this.idOrder.length = 0;
+  }
+
   merge(incoming: readonly Earthquake[]): boolean {
     let changed = false;
     for (const earthquake of incoming) {

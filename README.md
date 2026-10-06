@@ -43,6 +43,8 @@ WebSocketでは、情報コード561（個別の地震感知情報）をプロ�
 
 開発・確認時はURLに `?eewSandbox=1` を付けると、公式サンドボックスWebSocket `wss://api-realtime-sandbox.p2pquake.net/v2/ws`へ接続します。画面には `SANDBOX / 過去の情報を再生中` を表示し、本番モードとは区別します。URLパラメータは保存しません。
 
+実データを使わずに動作確認する場合は、URLに `?testMode=1` を付けます。TEST MODEでは本番HTTP/WebSocketへ接続せず、[`src/testFixtures/fixtures.ts`](src/testFixtures/fixtures.ts) の疑似fixtureだけを本番と同じparse・store・render経路へ渡します。画面のTEST PANELから551、9611、556の各状態、古いEEW報、取消、震源欠損、接続状態、全状態リセットを確認できます。疑似データとイベントログはテストモード内だけで使用し、テストモード状態は保存しません。
+
 地域コード・地域名・地方名・緯度・経度は、P2P地震情報公式リポジトリの [`epsp-area.csv`](https://github.com/p2pquake/epsp-specifications/blob/master/epsp-area.csv) から開発時に抽出した [`src/epspAreas.json`](src/epspAreas.json) を使用します。実行時に外部CSVは取得しません。地域位置も日本地図・震源と同じ投影設定を使います。
 
 ## 日本地図データ
@@ -75,6 +77,7 @@ python3 scripts/generate-japan-map.py /path/to/20190125_AreaInformationPrefectur
 - 556 EEWのeventId/serial管理、取消表示、予測震度の府県集約表示
 - EEW震源マーカー、予測震度オーバーレイ、EEW表示・自動フォーカス設定
 - EEW公式サンドボックスモード（`?eewSandbox=1`）
+- 動作確認用テストモード（`?testMode=1`、本番データ未接続）
 - 初回ローディング表示、通信失敗時のエラー表示と再試行
 - 情報IDによる重複排除（直近256 IDを保持）
 - PCでは情報パネルと大きな地図を左右に配置し、小画面では上下に配置
