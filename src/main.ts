@@ -57,7 +57,7 @@ app.innerHTML = `
   <div class="shell${isTestMode ? ' is-test-mode' : ''}">
     <header class="topbar">
       <h1 class="brand">Lightweight Earthquake Monitor</h1>
-      ${isTestMode ? '<div class="test-mode-banner" role="status"><strong>TEST MODE</strong><span>疑似データによる動作確認</span></div>' : ''}
+      ${isTestMode ? '<div class="test-mode-banner" role="status"><strong>TEST MODE</strong><span>疑似データによる動作確認</span><button id="test-panel-toggle" class="test-panel-toggle" type="button" aria-expanded="false" aria-controls="test-panel">TEST PANEL</button></div>' : ''}
       ${isEewSandbox ? '<div id="sandbox-banner" class="sandbox-banner" role="status"><strong>SANDBOX</strong><span>過去の情報を再生中</span></div>' : ''}
       <div class="header-actions">
         <div id="shake-status" class="shake-status" role="status" aria-live="polite" hidden>
@@ -142,41 +142,47 @@ app.innerHTML = `
         </svg>
         <p class="map-attribution">地図：気象庁「地震情報／都道府県等」のデータを加工して作成</p>
         <p id="map-status" class="map-status">地震情報を取得しています</p>
+        ${isTestMode ? `
+        <section id="test-panel" class="test-panel" aria-label="TEST PANEL" hidden>
+          <div class="test-panel-heading">
+            <div><strong>TEST PANEL</strong><small>固定fixtureによる疑似データ</small></div>
+            <button id="test-panel-close" class="test-panel-close" type="button">閉じる</button>
+          </div>
+          <div class="test-controls">
+            <div class="test-control-group" aria-label="地震情報テスト">
+              <span class="test-control-label">地震情報</span>
+              <button type="button" data-test-action="quake">通常地震を発生</button>
+            </div>
+            <div class="test-control-group" aria-label="揺れ検出テスト">
+              <span class="test-control-label">揺れ検出</span>
+              <button type="button" data-test-action="shake-start">揺れ検出を開始</button>
+              <button type="button" data-test-action="shake-update">揺れ検出を更新</button>
+              <button type="button" data-test-action="shake-end">揺れ検出を終了</button>
+            </div>
+            <div class="test-control-group" aria-label="EEWテスト">
+              <span class="test-control-label">EEW</span>
+              <button type="button" data-test-action="eew-1">EEW 第1報</button>
+              <button type="button" data-test-action="eew-2">EEW 第2報</button>
+              <button type="button" data-test-action="eew-3">EEW 第3報</button>
+              <button type="button" data-test-action="eew-old">古いEEW報を送信</button>
+              <button type="button" data-test-action="eew-missing">EEW震源欠損</button>
+              <button type="button" data-test-action="eew-cancel">EEW取消</button>
+            </div>
+            <div class="test-control-group" aria-label="接続状態テスト">
+              <span class="test-control-label">接続状態</span>
+              <button type="button" data-test-action="connection-live">LIVE</button>
+              <button type="button" data-test-action="connection-reconnecting">RECONNECTING</button>
+              <button type="button" data-test-action="connection-offline">OFFLINE</button>
+            </div>
+            <button type="button" class="test-reset-button" data-test-action="reset">全状態リセット</button>
+          </div>
+          <div class="test-log" aria-label="テストイベントログ">
+            <div class="test-log-heading"><strong>イベントログ</strong><span id="test-log-count">0 / 50</span></div>
+            <ol id="test-log-list"><li>fixtureを読み込んでいます</li></ol>
+          </div>
+        </section>` : ''}
       </section>
     </div>
-    ${isTestMode ? `
-    <section id="test-panel" class="test-panel" aria-label="TEST PANEL">
-      <div class="test-panel-heading">
-        <div><strong>TEST PANEL</strong><small>固定fixtureによる疑似データ</small></div>
-        <span>本番データ未接続</span>
-      </div>
-      <div class="test-controls">
-        <div class="test-control-group" aria-label="地震・揺れ検出テスト">
-          <button type="button" data-test-action="quake">通常地震を発生</button>
-          <button type="button" data-test-action="shake-start">揺れ検出を開始</button>
-          <button type="button" data-test-action="shake-update">揺れ検出を更新</button>
-          <button type="button" data-test-action="shake-end">揺れ検出を終了</button>
-        </div>
-        <div class="test-control-group" aria-label="EEWテスト">
-          <button type="button" data-test-action="eew-1">EEW 第1報</button>
-          <button type="button" data-test-action="eew-2">EEW 第2報</button>
-          <button type="button" data-test-action="eew-3">EEW 第3報</button>
-          <button type="button" data-test-action="eew-old">古いEEW報</button>
-          <button type="button" data-test-action="eew-missing">EEW震源欠損</button>
-          <button type="button" data-test-action="eew-cancel">EEW取消</button>
-        </div>
-        <div class="test-control-group" aria-label="接続状態テスト">
-          <button type="button" data-test-action="connection-live">LIVE</button>
-          <button type="button" data-test-action="connection-reconnecting">RECONNECTING</button>
-          <button type="button" data-test-action="connection-offline">OFFLINE</button>
-        </div>
-        <button type="button" class="test-reset-button" data-test-action="reset">全状態リセット</button>
-      </div>
-      <div class="test-log" aria-label="テストイベントログ">
-        <div class="test-log-heading"><strong>イベントログ</strong><span id="test-log-count">0 / 50</span></div>
-        <ol id="test-log-list"><li>fixtureを読み込んでいます</li></ol>
-      </div>
-    </section>` : ''}
   </div>`;
 
 const latestCard = document.querySelector<HTMLElement>('#latest-card')!;
@@ -221,6 +227,8 @@ const autoFocusToggle = document.querySelector<HTMLInputElement>('#auto-focus-to
 const eewToggle = document.querySelector<HTMLInputElement>('#eew-toggle')!;
 const eewAutoFocusToggle = document.querySelector<HTMLInputElement>('#eew-auto-focus-toggle')!;
 const testPanel = document.querySelector<HTMLElement>('#test-panel');
+const testPanelToggle = document.querySelector<HTMLButtonElement>('#test-panel-toggle');
+const testPanelClose = document.querySelector<HTMLButtonElement>('#test-panel-close');
 const testLogList = document.querySelector<HTMLOListElement>('#test-log-list');
 const testLogCount = document.querySelector<HTMLSpanElement>('#test-log-count');
 const store = new EarthquakeStore();
@@ -941,6 +949,30 @@ eewToggle.addEventListener('change', () => {
 eewAutoFocusToggle.addEventListener('change', () => {
   settings = { ...settings, eewAutoFocusEnabled: eewAutoFocusToggle.checked };
   applySettings();
+}, { signal: lifecycle.signal });
+
+function setTestPanelOpen(open: boolean): void {
+  if (!testPanel || !testPanelToggle) return;
+  testPanel.hidden = !open;
+  testPanelToggle.setAttribute('aria-expanded', String(open));
+  testPanelToggle.textContent = open ? 'TEST PANELを閉じる' : 'TEST PANEL';
+  if (open) testPanelClose?.focus();
+}
+
+testPanelToggle?.addEventListener('click', () => {
+  setTestPanelOpen(testPanel?.hidden ?? true);
+}, { signal: lifecycle.signal });
+
+testPanelClose?.addEventListener('click', () => {
+  setTestPanelOpen(false);
+  testPanelToggle?.focus();
+}, { signal: lifecycle.signal });
+
+testPanel?.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    setTestPanelOpen(false);
+    testPanelToggle?.focus();
+  }
 }, { signal: lifecycle.signal });
 
 const testConnectionAdapter = {
