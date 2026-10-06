@@ -114,7 +114,7 @@ button { color: inherit; font: inherit; }
 .list-loading, .empty-state { min-height: 100px; display: flex; align-items: center; justify-content: center; gap: 9px; padding: 16px; color: var(--muted); font-size: 12px; text-align: center; }
 
 .map-panel { position: relative; min-width: 0; min-height: 0; display: grid; place-items: center; overflow: hidden; background: var(--map-sea); }
-.japan-map { display: block; width: 100%; height: 100%; max-width: 100%; max-height: 100%; cursor: grab; touch-action: none; user-select: none; }
+.japan-map { position: relative; z-index: 0; display: block; width: 100%; height: 100%; max-width: 100%; max-height: 100%; cursor: grab; touch-action: none; user-select: none; }
 .japan-map.is-dragging { cursor: grabbing; }
 .eew-prefecture-overlays { pointer-events: none; }
 .eew-prefecture { pointer-events: none; }
@@ -126,7 +126,7 @@ button { color: inherit; font: inherit; }
 .map-legend .legend-eew { background: #f3c36e; box-shadow: 0 0 0 3px #f3c36e33; }
 .map-legend .legend-detection { background: #e2aa61; box-shadow: 0 0 0 3px #e2aa6133; }
 .map-legend .legend-past { background: #82b5d7; opacity: .75; }
-.map-controls { position: absolute; z-index: 2; top: 16px; right: 18px; display: flex; gap: 4px; }
+.map-controls { position: absolute; z-index: 5; top: 16px; right: 18px; display: flex; gap: 4px; pointer-events: auto; }
 .map-controls button { min-width: 29px; height: 27px; padding: 0 7px; border: 1px solid #3c596b; border-radius: 3px; background: #12212dcc; color: #d3e1ea; font-size: 14px; line-height: 1; cursor: pointer; }
 .map-controls button:hover, .map-controls button:focus-visible { border-color: #82abc3; background: #1b3444ee; color: #f1f7fb; outline: none; }
 .map-controls button:last-child { font-size: 10px; }
