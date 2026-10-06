@@ -80,6 +80,9 @@ export interface P2PUserquakeEvaluation {
 export interface Earthquake {
   id: string;
   time: string;
+  /** P2P BasicData.time and issue.time are retained for receive timing only. */
+  basicTime: string | null;
+  issueTime: string | null;
   hypocenter: string;
   maxScale: number | null;
   magnitude: number | null;

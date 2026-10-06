@@ -35,6 +35,8 @@ export function parseEarthquake(value: unknown): Earthquake | null {
   return {
     id: item.id,
     time: eventTime,
+    basicTime: typeof item.time === 'string' ? item.time : null,
+    issueTime: typeof item.issue?.time === 'string' ? item.issue.time : null,
     hypocenter: typeof hypocenter?.name === 'string' ? hypocenter.name : '震源地不明',
     maxScale: finiteValue(item.earthquake.maxScale, -1),
     magnitude: finiteValue(hypocenter?.magnitude, -1),

@@ -1,8 +1,10 @@
 import './style.css';
 import { fetchRecentEarthquakes, parseEarthquake, parseEew, parseEewDetection, parseShakeDetection, parseUserquake } from './api';
+import { AudioNotifier, type AudioCue, type AudioNotifyResult } from './audioNotifier';
 import { EarthquakeStore } from './earthquakeStore';
 import { MAP_VIEWBOX, projectCoordinates, projectEpicenter } from './mapProjection';
 import areasData from './epspAreas.json';
+import { calculateLatency, formatAge, formatClock, formatLatency, parseP2pTimestamp, type LatencyValue } from './timeUtils';
 import type { Earthquake, EewArea, EewMessage, EpspArea, ShakeDetection } from './types';
 
 const japanMapUrl = new URL('./assets/japan-map.svg', import.meta.url).href;
@@ -42,6 +44,11 @@ interface MonitorSettings {
   eewEnabled: boolean;
   eewAutoFocusEnabled: boolean;
   realtimeIntensityEnabled: false;
+  audioNotificationsEnabled: boolean;
+  eewAudioEnabled: boolean;
+  shakeAudioEnabled: boolean;
+  earthquakeAudioEnabled: boolean;
+  audioVolume: number;
 }
 
 const DEFAULT_SETTINGS: MonitorSettings = {
@@ -50,6 +57,11 @@ const DEFAULT_SETTINGS: MonitorSettings = {
   eewEnabled: true,
   eewAutoFocusEnabled: true,
   realtimeIntensityEnabled: false,
+  audioNotificationsEnabled: false,
+  eewAudioEnabled: true,
+  shakeAudioEnabled: true,
+  earthquakeAudioEnabled: true,
+  audioVolume: 50,
 };
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -68,7 +80,7 @@ app.innerHTML = `
           <small>P2P感知解析結果</small>
         </div>
         <button id="settings-toggle" class="settings-toggle" type="button" aria-expanded="false" aria-controls="settings-panel" title="動作設定">⚙ 設定</button>
-        <div id="connection-status" class="live is-offline" role="status" aria-live="polite"><span class="live-dot"></span><span id="connection-label">OFFLINE</span></div>
+        <div id="connection-status" class="live is-offline" role="status" aria-live="polite" title="WebSocket未接続"><span class="live-dot"></span><span id="connection-label">OFFLINE</span><small id="connection-description" class="live-description">WebSocket未接続</small></div>
       </div>
       <section id="settings-panel" class="settings-panel" aria-label="動作設定" hidden>
       <div class="settings-heading"><h2>動作設定</h2><span>保存済み</span></div>
@@ -92,6 +104,39 @@ app.innerHTML = `
         <span><strong>リアルタイム震度</strong><small>データソース準備中</small></span>
         <input class="settings-checkbox" type="checkbox" disabled aria-label="リアルタイム震度（データソース準備中）" />
       </div>
+      <div class="settings-divider">音声通知</div>
+      <label class="settings-row">
+        <span><strong>音声通知</strong><small>ブラウザ生成の短い通知音</small></span>
+        <input id="audio-notifications-toggle" class="settings-checkbox" type="checkbox" />
+      </label>
+      <label class="settings-row">
+        <span><strong>EEW通知音</strong><small>新しいeventIdのみ</small></span>
+        <input id="eew-audio-toggle" class="settings-checkbox" type="checkbox" checked />
+      </label>
+      <label class="settings-row">
+        <span><strong>揺れ検出通知音</strong><small>非検出から検出へ変化した時</small></span>
+        <input id="shake-audio-toggle" class="settings-checkbox" type="checkbox" checked />
+      </label>
+      <label class="settings-row">
+        <span><strong>地震情報通知音</strong><small>新着WebSocket情報のみ</small></span>
+        <input id="earthquake-audio-toggle" class="settings-checkbox" type="checkbox" checked />
+      </label>
+      <div class="settings-row settings-volume-row">
+        <span><strong>音量</strong><small><span id="audio-volume-label">50%</span></small></span>
+        <input id="audio-volume" class="audio-volume" type="range" min="0" max="100" step="1" value="50" aria-label="音量" />
+      </div>
+      <div class="audio-status-row">
+        <span id="audio-status" role="status" aria-live="polite">音声：OFF</span>
+        <button id="audio-enable" class="audio-enable-button" type="button" hidden>音声を有効化</button>
+      </div>
+      <div class="audio-test-row">
+        <span>テスト再生</span>
+        <div class="audio-test-buttons">
+          <button id="audio-test-earthquake" type="button">地震情報</button>
+          <button id="audio-test-shake" type="button">揺れ検出</button>
+          <button id="audio-test-eew" type="button">EEW</button>
+        </div>
+      </div>
       <p class="settings-note">揺れ検出はP2P地震情報ユーザーの感知情報を解析した状態です。震度観測や地震発生の確定を示すものではありません。</p>
       </section>
     </header>
@@ -107,6 +152,11 @@ app.innerHTML = `
             <time id="latest-date" class="latest-time">—</time>
             <div class="latest-measures"><span id="latest-magnitude">M —</span><span id="latest-depth">深さ —</span></div>
           </article>
+          <div id="latest-receive-metrics" class="receive-metrics" hidden>
+            <span>受信 <strong id="latest-received-at">—</strong> <em id="latest-received-age">待機中</em></span>
+            <span>P2P→Browser <strong id="latest-p2p-latency">—</strong></span>
+            <span>発表→Browser <strong id="latest-source-latency">—</strong></span>
+          </div>
           <article id="eew-details" class="eew-details" hidden>
             <div class="eew-heading-row"><strong>緊急地震速報</strong><span id="eew-test-badge" class="eew-test-badge" hidden>TEST / 訓練・試験情報</span></div>
             <strong id="eew-report" class="eew-report">第—報</strong>
@@ -117,6 +167,11 @@ app.innerHTML = `
             <div class="eew-forecast"><span>最大予測震度</span><strong id="eew-scale">—</strong></div>
             <div id="eew-arrival-state" class="eew-arrival-state" hidden></div>
             <div id="eew-forecast-areas" class="eew-forecast-areas" hidden></div>
+            <div id="eew-receive-metrics" class="receive-metrics" hidden>
+              <span>受信 <strong id="eew-received-at">—</strong> <em id="eew-received-age">待機中</em></span>
+              <span>P2P→Browser <strong id="eew-p2p-latency">—</strong></span>
+              <span>発表→Browser <strong id="eew-source-latency">—</strong></span>
+            </div>
             <small class="eew-disclaimer">P2P地震情報経由・参考情報</small>
           </article>
           <article id="eew-cancelled" class="eew-cancelled" hidden>
@@ -149,6 +204,14 @@ app.innerHTML = `
         </div>
         <p class="map-attribution">地図：気象庁「地震情報／都道府県等」のデータを加工して作成</p>
         <p id="map-status" class="map-status">地震情報を取得しています</p>
+        <section id="monitor-status" class="monitor-status" aria-label="受信監視">
+          <strong>受信監視</strong>
+          <span><b>WebSocket</b><i id="monitor-connection">OFFLINE</i></span>
+          <span><b>${isTestMode ? '最終テスト受信' : '最終WebSocket受信'}</b><i id="monitor-last-receive">待機中</i></span>
+          <span><b>最新EEW</b><i id="monitor-latest-eew">待機中</i></span>
+          <span><b>揺れ検出</b><i id="monitor-shake">待機中</i></span>
+          <span><b>最新地震情報受信</b><i id="monitor-latest-quake">待機中</i></span>
+        </section>
         ${isTestMode ? `
         <section id="test-panel" class="test-panel" aria-label="TEST PANEL" hidden>
           <div class="test-panel-heading">
@@ -205,6 +268,11 @@ const latestPlace = document.querySelector<HTMLElement>('#latest-place-name')!;
 const latestDate = document.querySelector<HTMLElement>('#latest-date')!;
 const latestMagnitude = document.querySelector<HTMLElement>('#latest-magnitude')!;
 const latestDepth = document.querySelector<HTMLElement>('#latest-depth')!;
+const latestReceiveMetrics = document.querySelector<HTMLElement>('#latest-receive-metrics')!;
+const latestReceivedAt = document.querySelector<HTMLElement>('#latest-received-at')!;
+const latestReceivedAge = document.querySelector<HTMLElement>('#latest-received-age')!;
+const latestP2pLatency = document.querySelector<HTMLElement>('#latest-p2p-latency')!;
+const latestSourceLatency = document.querySelector<HTMLElement>('#latest-source-latency')!;
 const eewDetails = document.querySelector<HTMLElement>('#eew-details')!;
 const eewTestBadge = document.querySelector<HTMLElement>('#eew-test-badge')!;
 const eewReport = document.querySelector<HTMLElement>('#eew-report')!;
@@ -215,6 +283,11 @@ const eewDepth = document.querySelector<HTMLElement>('#eew-depth')!;
 const eewScale = document.querySelector<HTMLElement>('#eew-scale')!;
 const eewArrivalState = document.querySelector<HTMLElement>('#eew-arrival-state')!;
 const eewForecastAreas = document.querySelector<HTMLElement>('#eew-forecast-areas')!;
+const eewReceiveMetrics = document.querySelector<HTMLElement>('#eew-receive-metrics')!;
+const eewReceivedAt = document.querySelector<HTMLElement>('#eew-received-at')!;
+const eewReceivedAge = document.querySelector<HTMLElement>('#eew-received-age')!;
+const eewP2pLatency = document.querySelector<HTMLElement>('#eew-p2p-latency')!;
+const eewSourceLatency = document.querySelector<HTMLElement>('#eew-source-latency')!;
 const eewCancelled = document.querySelector<HTMLElement>('#eew-cancelled')!;
 const japanMap = document.querySelector<SVGSVGElement>('#japan-map')!;
 const eewPrefectureOverlays = document.querySelector<SVGGElement>('#eew-prefecture-overlays')!;
@@ -228,14 +301,31 @@ const mapZoomOut = document.querySelector<HTMLButtonElement>('#map-zoom-out')!;
 const mapReset = document.querySelector<HTMLButtonElement>('#map-reset')!;
 const connectionStatus = document.querySelector<HTMLDivElement>('#connection-status')!;
 const connectionLabel = document.querySelector<HTMLSpanElement>('#connection-label')!;
+const connectionDescription = document.querySelector<HTMLElement>('#connection-description')!;
 const shakeStatus = document.querySelector<HTMLDivElement>('#shake-status')!;
 const shakeStatusDetail = document.querySelector<HTMLSpanElement>('#shake-status-detail')!;
+const monitorConnection = document.querySelector<HTMLElement>('#monitor-connection')!;
+const monitorLastReceive = document.querySelector<HTMLElement>('#monitor-last-receive')!;
+const monitorLatestEew = document.querySelector<HTMLElement>('#monitor-latest-eew')!;
+const monitorShake = document.querySelector<HTMLElement>('#monitor-shake')!;
+const monitorLatestQuake = document.querySelector<HTMLElement>('#monitor-latest-quake')!;
 const settingsToggle = document.querySelector<HTMLButtonElement>('#settings-toggle')!;
 const settingsPanel = document.querySelector<HTMLElement>('#settings-panel')!;
 const shakeDetectionToggle = document.querySelector<HTMLInputElement>('#shake-detection-toggle')!;
 const autoFocusToggle = document.querySelector<HTMLInputElement>('#auto-focus-toggle')!;
 const eewToggle = document.querySelector<HTMLInputElement>('#eew-toggle')!;
 const eewAutoFocusToggle = document.querySelector<HTMLInputElement>('#eew-auto-focus-toggle')!;
+const audioNotificationsToggle = document.querySelector<HTMLInputElement>('#audio-notifications-toggle')!;
+const eewAudioToggle = document.querySelector<HTMLInputElement>('#eew-audio-toggle')!;
+const shakeAudioToggle = document.querySelector<HTMLInputElement>('#shake-audio-toggle')!;
+const earthquakeAudioToggle = document.querySelector<HTMLInputElement>('#earthquake-audio-toggle')!;
+const audioVolume = document.querySelector<HTMLInputElement>('#audio-volume')!;
+const audioVolumeLabel = document.querySelector<HTMLSpanElement>('#audio-volume-label')!;
+const audioStatus = document.querySelector<HTMLSpanElement>('#audio-status')!;
+const audioEnableButton = document.querySelector<HTMLButtonElement>('#audio-enable')!;
+const audioTestEarthquake = document.querySelector<HTMLButtonElement>('#audio-test-earthquake')!;
+const audioTestShake = document.querySelector<HTMLButtonElement>('#audio-test-shake')!;
+const audioTestEew = document.querySelector<HTMLButtonElement>('#audio-test-eew')!;
 const testPanel = document.querySelector<HTMLElement>('#test-panel');
 const testPanelToggle = document.querySelector<HTMLButtonElement>('#test-panel-toggle');
 const testPanelClose = document.querySelector<HTMLButtonElement>('#test-panel-close');
@@ -253,11 +343,27 @@ let reconnectAttempt = 0;
 let connectionEstablished = false;
 let selectedEarthquakeId: string | null = null;
 let settings = readSettings();
+const audioNotifier = new AudioNotifier(isEewSandbox);
 let currentShakeDetection: ShakeDetection | null = null;
+interface ReceiveTiming {
+  browserReceivedAt: number;
+  basicTimestamp: string | null;
+  sourceTimestamp: string | null;
+  p2pToBrowser: LatencyValue;
+  sourceToBrowser: LatencyValue;
+}
+
+const MAX_RECEIVE_TIMINGS = 256;
+const earthquakeReceiveTimings = new Map<string, ReceiveTiming>();
+const earthquakeReceiveTimingOrder: string[] = [];
+let currentShakeReceiveTiming: ReceiveTiming | null = null;
+let lastWebSocketReceivedAt: number | null = null;
+let receiveAgeTimer: number | undefined;
 let shakeDetectionTimer: number | undefined;
 let lastFocusedShakeEvent: string | null = null;
 interface StoredEew extends EewMessage {
   receivedAt: number;
+  receiveTiming: ReceiveTiming;
 }
 
 const eewByEventId = new Map<string, StoredEew>();
@@ -295,12 +401,20 @@ const testLogs: string[] = [];
 function readSettings(): MonitorSettings {
   try {
     const stored = JSON.parse(window.localStorage.getItem(SETTINGS_STORAGE_KEY) ?? 'null') as Partial<MonitorSettings> | null;
+    const storedVolume = typeof stored?.audioVolume === 'number' && Number.isFinite(stored.audioVolume)
+      ? Math.min(100, Math.max(0, stored.audioVolume))
+      : DEFAULT_SETTINGS.audioVolume;
     return {
       shakeDetectionEnabled: stored?.shakeDetectionEnabled !== false,
       autoFocusEnabled: stored?.autoFocusEnabled !== false,
       eewEnabled: stored?.eewEnabled !== false,
       eewAutoFocusEnabled: stored?.eewAutoFocusEnabled !== false,
       realtimeIntensityEnabled: false,
+      audioNotificationsEnabled: stored?.audioNotificationsEnabled === true,
+      eewAudioEnabled: stored?.eewAudioEnabled !== false,
+      shakeAudioEnabled: stored?.shakeAudioEnabled !== false,
+      earthquakeAudioEnabled: stored?.earthquakeAudioEnabled !== false,
+      audioVolume: storedVolume,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -313,6 +427,61 @@ function saveSettings(): void {
   } catch {
     // 設定を保存できない環境でも、現在のページ内では機能を継続します。
   }
+}
+
+function audioStatusLabel(): string {
+  switch (audioNotifier.status()) {
+    case 'enabled':
+      return '音声：有効';
+    case 'waiting':
+      return '音声：ブラウザ操作待ち';
+    case 'sandbox-locked':
+      return '音声：Sandbox操作待ち';
+    case 'unavailable':
+      return '音声：利用できません';
+    default:
+      return '音声：OFF';
+  }
+}
+
+function updateAudioUi(): void {
+  audioNotificationsToggle.checked = settings.audioNotificationsEnabled;
+  eewAudioToggle.checked = settings.eewAudioEnabled;
+  shakeAudioToggle.checked = settings.shakeAudioEnabled;
+  earthquakeAudioToggle.checked = settings.earthquakeAudioEnabled;
+  audioVolume.value = String(settings.audioVolume);
+  audioVolumeLabel.textContent = `${settings.audioVolume}%`;
+  audioStatus.textContent = audioStatusLabel();
+
+  const showEnable = settings.audioNotificationsEnabled && audioNotifier.status() !== 'enabled' && audioNotifier.status() !== 'unavailable';
+  audioEnableButton.hidden = !showEnable;
+  audioEnableButton.textContent = isEewSandbox ? 'SANDBOX音声を有効化' : '音声を有効化';
+  const testDisabled = !settings.audioNotificationsEnabled || (isEewSandbox && !audioNotifier.isSandboxUnlocked());
+  audioTestEarthquake.disabled = testDisabled;
+  audioTestShake.disabled = testDisabled;
+  audioTestEew.disabled = testDisabled;
+}
+
+function reportTestAudio(cue: AudioCue, result: AudioNotifyResult): void {
+  if (!isTestMode) return;
+  const names: Record<AudioCue, string> = {
+    earthquake: 'earthquake',
+    shake: 'shake detection',
+    eew: 'EEW',
+    cancel: 'EEW cancel',
+  };
+  if (result === 'queued') addTestLog(`audio: ${names[cue]}`);
+  else if (result === 'suppressed') addTestLog(`audio suppressed: ${names[cue]}`);
+  else if (result === 'waiting') addTestLog(`audio waiting: ${names[cue]}`);
+  else if (result === 'sandbox-locked') addTestLog(`audio locked: ${names[cue]}`);
+  else if (result === 'disabled') addTestLog(`audio OFF: ${names[cue]}`);
+  else addTestLog(`audio unavailable: ${names[cue]}`);
+}
+
+function notifyAudio(cue: AudioCue): AudioNotifyResult {
+  const result = audioNotifier.notify(cue);
+  reportTestAudio(cue, result);
+  return result;
 }
 
 function addTestLog(message: string): void {
@@ -333,6 +502,98 @@ function clearTestLogs(): void {
   testLogs.length = 0;
   testLogList.replaceChildren();
   testLogCount.textContent = '0 / 50';
+}
+
+function payloadString(value: unknown, ...keys: string[]): string | null {
+  let current: unknown = value;
+  for (const key of keys) {
+    if (typeof current !== 'object' || current === null || Array.isArray(current)) return null;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return typeof current === 'string' && current.length > 0 ? current : null;
+}
+
+function createReceiveTiming(payload: unknown, browserReceivedAt: number, sourceTimestamp: string | null = null): ReceiveTiming {
+  const basicTimestamp = payloadString(payload, 'time');
+  return {
+    browserReceivedAt,
+    basicTimestamp,
+    sourceTimestamp,
+    p2pToBrowser: calculateLatency(browserReceivedAt, basicTimestamp),
+    sourceToBrowser: calculateLatency(browserReceivedAt, sourceTimestamp),
+  };
+}
+
+function rememberEarthquakeReceiveTiming(id: string, timing: ReceiveTiming): void {
+  if (earthquakeReceiveTimings.has(id)) {
+    earthquakeReceiveTimings.set(id, timing);
+    return;
+  }
+  earthquakeReceiveTimings.set(id, timing);
+  earthquakeReceiveTimingOrder.push(id);
+  if (earthquakeReceiveTimingOrder.length > MAX_RECEIVE_TIMINGS) {
+    const expiredId = earthquakeReceiveTimingOrder.shift();
+    if (expiredId) earthquakeReceiveTimings.delete(expiredId);
+  }
+}
+
+function rememberHistoryReceiveTimings(earthquakes: readonly Earthquake[], browserReceivedAt: number): void {
+  for (const earthquake of earthquakes) {
+    if (earthquakeReceiveTimings.has(earthquake.id)) continue;
+    rememberEarthquakeReceiveTiming(earthquake.id, {
+      browserReceivedAt,
+      basicTimestamp: earthquake.basicTime,
+      sourceTimestamp: earthquake.issueTime,
+      p2pToBrowser: calculateLatency(browserReceivedAt, earthquake.basicTime),
+      sourceToBrowser: calculateLatency(browserReceivedAt, earthquake.issueTime),
+    });
+  }
+}
+
+function renderLatestReceiveMetrics(latest: Earthquake | undefined): void {
+  const timing = latest ? earthquakeReceiveTimings.get(latest.id) : undefined;
+  latestReceiveMetrics.hidden = !timing;
+  if (!timing) return;
+  latestReceivedAt.textContent = formatClock(timing.browserReceivedAt);
+  latestP2pLatency.textContent = formatLatency(timing.p2pToBrowser);
+  latestSourceLatency.textContent = formatLatency(timing.sourceToBrowser);
+  latestReceivedAge.textContent = formatAge(timing.browserReceivedAt);
+}
+
+function renderEewReceiveMetrics(timing: ReceiveTiming | null): void {
+  eewReceiveMetrics.hidden = timing === null;
+  if (!timing) return;
+  eewReceivedAt.textContent = formatClock(timing.browserReceivedAt);
+  eewReceivedAge.textContent = formatAge(timing.browserReceivedAt);
+  eewP2pLatency.textContent = formatLatency(timing.p2pToBrowser);
+  eewSourceLatency.textContent = formatLatency(timing.sourceToBrowser);
+}
+
+function updateReceiveAgeDisplays(): void {
+  const latest = store.recent[0];
+  const latestTiming = latest ? earthquakeReceiveTimings.get(latest.id) : undefined;
+  monitorLastReceive.textContent = formatAge(lastWebSocketReceivedAt);
+  monitorLatestEew.textContent = activeEew
+    ? `受信 ${formatAge(activeEew.receiveTiming.browserReceivedAt)}`
+    : eewCancelledMessageVisible ? '取消表示中' : '待機中';
+  monitorShake.textContent = currentShakeDetection && currentShakeReceiveTiming
+    ? `更新 ${formatAge(currentShakeReceiveTiming.browserReceivedAt)}`
+    : '待機中';
+  monitorLatestQuake.textContent = latestTiming ? formatAge(latestTiming.browserReceivedAt) : '待機中';
+  latestReceivedAge.textContent = latestTiming ? formatAge(latestTiming.browserReceivedAt) : '待機中';
+  if (activeEew) eewReceivedAge.textContent = formatAge(activeEew.receiveTiming.browserReceivedAt);
+}
+
+function startReceiveAgeTimer(): void {
+  updateReceiveAgeDisplays();
+  if (receiveAgeTimer === undefined) receiveAgeTimer = window.setInterval(updateReceiveAgeDisplays, 1_000);
+}
+
+function addTestTimingLog(label: string, timing: ReceiveTiming, sourceLabel = 'source→Browser'): void {
+  if (!isTestMode) return;
+  addTestLog(`${label} received`);
+  addTestLog(`P2P→Browser: ${formatLatency(timing.p2pToBrowser)}`);
+  if (timing.sourceTimestamp) addTestLog(`${sourceLabel}: ${formatLatency(timing.sourceToBrowser)}`);
 }
 
 function readMapViewBox(): MapViewBox {
@@ -528,9 +789,11 @@ function clearShakeDetection(): void {
   if (shakeDetectionTimer !== undefined) window.clearTimeout(shakeDetectionTimer);
   shakeDetectionTimer = undefined;
   currentShakeDetection = null;
+  currentShakeReceiveTiming = null;
   lastFocusedShakeEvent = null;
   if (!mapManualOverride) resetMapView();
   renderShakeDetection();
+  updateReceiveAgeDisplays();
 }
 
 function scheduleShakeDetectionExpiry(): void {
@@ -538,20 +801,27 @@ function scheduleShakeDetectionExpiry(): void {
   shakeDetectionTimer = window.setTimeout(() => {
     shakeDetectionTimer = undefined;
     currentShakeDetection = null;
+    currentShakeReceiveTiming = null;
     lastFocusedShakeEvent = null;
     if (!mapManualOverride) resetMapView();
     renderShakeDetection();
+    updateReceiveAgeDisplays();
   }, DETECTION_TIMEOUT_MS);
 }
 
-function updateShakeDetection(detection: ShakeDetection): void {
+type ShakeUpdateResult = 'started' | 'updated' | 'ended' | 'ignored';
+
+function updateShakeDetection(detection: ShakeDetection, receiveTiming: ReceiveTiming): ShakeUpdateResult {
   if (!settings.shakeDetectionEnabled || detection.count <= 0 || detection.confidence <= 0) {
+    const wasActive = currentShakeDetection !== null;
     clearShakeDetection();
-    return;
+    return wasActive ? 'ended' : 'ignored';
   }
 
+  const wasActive = currentShakeDetection !== null;
   const isNewDetectionEvent = currentShakeDetection?.startedAt !== detection.startedAt;
   currentShakeDetection = detection;
+  currentShakeReceiveTiming = receiveTiming;
   const areas = highConfidenceAreas(detection);
   if (
     !activeEew &&
@@ -568,6 +838,7 @@ function updateShakeDetection(detection: ShakeDetection): void {
   }
   renderShakeDetection();
   scheduleShakeDetectionExpiry();
+  return wasActive ? 'updated' : 'started';
 }
 
 function applySettings(): void {
@@ -575,6 +846,8 @@ function applySettings(): void {
   autoFocusToggle.checked = settings.autoFocusEnabled;
   eewToggle.checked = settings.eewEnabled;
   eewAutoFocusToggle.checked = settings.eewAutoFocusEnabled;
+  audioNotifier.setEnabled(settings.audioNotificationsEnabled);
+  audioNotifier.setVolume(settings.audioVolume);
   if (!settings.shakeDetectionEnabled) clearShakeDetection();
   else if (!settings.autoFocusEnabled) {
     lastFocusedShakeEvent = null;
@@ -599,6 +872,7 @@ function applySettings(): void {
     markMapAutoFocusApplied('eew');
   }
   renderShakeDetection();
+  updateAudioUi();
   saveSettings();
 }
 
@@ -746,12 +1020,13 @@ function maxEewScale(areas: readonly EewArea[]): number | null {
   return values.length > 0 ? Math.max(...values) : null;
 }
 
-function renderEewPanel(eew: EewMessage): void {
+function renderEewPanel(eew: StoredEew): void {
   latestCard.classList.add('is-eew');
   latestHeading.textContent = '緊急地震速報';
   latestIndicatorLabel.textContent = eew.test ? 'TEST' : 'EEW';
   latestLoading.hidden = true;
   latestDetails.hidden = true;
+  latestReceiveMetrics.hidden = true;
   eewCancelled.hidden = true;
   eewDetails.hidden = false;
   eewTestBadge.hidden = !eew.test;
@@ -774,6 +1049,7 @@ function renderEewPanel(eew: EewMessage): void {
   eewForecastAreas.textContent = forecasts.length > 0
     ? `府県集約予測：${forecasts.slice(0, 5).map((forecast) => `${forecast.prefecture} ${scaleLabel(forecast.scaleTo)}`).join('、')}${forecasts.length > 5 ? ' ほか' : ''}`
     : '';
+  renderEewReceiveMetrics(eew.receiveTiming);
 }
 
 function renderEewCancelled(): void {
@@ -784,6 +1060,8 @@ function renderEewCancelled(): void {
   latestDetails.hidden = true;
   eewDetails.hidden = true;
   eewCancelled.hidden = false;
+  latestReceiveMetrics.hidden = true;
+  renderEewReceiveMetrics(null);
 }
 
 function compareEewSerial(left: string, right: string): number {
@@ -865,19 +1143,21 @@ function clearEewState(): void {
   if (hasLoaded) renderMarkers(store.recent);
 }
 
-type EewUpdateResult = 'disabled' | 'ignored-old' | 'duplicate' | 'ignored-cancelled' | 'cancelled' | 'updated';
+type EewUpdateResult = 'disabled' | 'ignored-old' | 'duplicate' | 'ignored-cancelled' | 'cancelled' | 'new' | 'updated';
 
-function updateEew(eew: EewMessage): EewUpdateResult {
+function updateEew(eew: EewMessage, receiveTiming: ReceiveTiming): EewUpdateResult {
   if (!settings.eewEnabled) return 'disabled';
   const existing = eewByEventId.get(eew.issue.eventId);
   const isNewEvent = existing === undefined;
   if (existing) {
     const serialOrder = compareEewSerial(eew.issue.serial, existing.issue.serial);
     if (serialOrder < 0) return 'ignored-old';
-    if (serialOrder === 0 && eew.id === existing.id) return 'duplicate';
+    // A serial identifies the report revision for an event.  Treat a
+    // repeated serial as a duplicate even when the transport id differs.
+    if (serialOrder === 0) return 'duplicate';
   }
 
-  const record: StoredEew = { ...eew, receivedAt: Date.now() };
+  const record: StoredEew = { ...eew, receivedAt: Date.now(), receiveTiming };
   eewByEventId.set(eew.issue.eventId, record);
   pruneEewEvents();
 
@@ -908,14 +1188,15 @@ function updateEew(eew: EewMessage): EewUpdateResult {
   }
   renderEewPrefectureOverlays(eew);
   renderEewMarker(eew);
-  renderEewPanel(eew);
+  renderEewPanel(record);
   scheduleEewExpiry(eew.issue.eventId, eew.issue.serial);
-  return 'updated';
+  return isNewEvent ? 'new' : 'updated';
 }
 
 function formatTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '時刻不明';
+  const timestamp = parseP2pTimestamp(value);
+  if (timestamp === null) return '時刻不明';
+  const date = new Date(timestamp);
   return new Intl.DateTimeFormat('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
 }
 
@@ -940,8 +1221,10 @@ function renderLatest(latest: Earthquake | undefined): void {
   latestIndicatorLabel.textContent = '最新';
   eewDetails.hidden = true;
   eewCancelled.hidden = true;
+  renderEewReceiveMetrics(null);
   if (!latest) {
     latestDetails.hidden = true;
+    latestReceiveMetrics.hidden = true;
     latestLoading.hidden = false;
     latestLoading.innerHTML = '<div class="empty-state">表示できる地震情報はありません</div>';
     mapStatus.textContent = '表示できる地震情報はありません';
@@ -955,6 +1238,7 @@ function renderLatest(latest: Earthquake | undefined): void {
   latestDate.textContent = formatTime(latest.time);
   latestMagnitude.textContent = `M ${latest.magnitude?.toFixed(1) ?? '—'}`;
   latestDepth.textContent = latest.depth === null ? '深さ —' : latest.depth === 0 ? 'ごく浅い' : `深さ ${latest.depth} km`;
+  renderLatestReceiveMetrics(latest);
 
 }
 
@@ -1083,9 +1367,13 @@ function setConnectionState(state: 'live' | 'reconnecting' | 'offline'): void {
   connectionStatus.classList.remove('is-live', 'is-reconnecting', 'is-offline');
   connectionStatus.classList.add(`is-${state}`);
   connectionLabel.textContent = state === 'live' ? 'LIVE' : state === 'reconnecting' ? 'RECONNECTING' : 'OFFLINE';
+  const description = state === 'live' ? 'WebSocket接続中' : state === 'reconnecting' ? 'WebSocket再接続中' : 'WebSocket未接続';
+  connectionDescription.textContent = description;
+  connectionStatus.title = description;
+  monitorConnection.textContent = state === 'live' ? 'LIVE' : state === 'reconnecting' ? 'RECONNECTING' : 'OFFLINE';
 }
 
-function updateTimestamp(prefix = '最終更新'): void {
+function updateTimestamp(prefix = '状態表示'): void {
   updatedAt.textContent = `${prefix} ${new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
 }
 
@@ -1174,6 +1462,24 @@ japanMap.addEventListener('wheel', (event) => {
   zoomMapByFactor(event.deltaY < 0 ? 1 / MAP_ZOOM_FACTOR : MAP_ZOOM_FACTOR, event.clientX, event.clientY);
 }, { passive: false, signal: lifecycle.signal });
 
+async function enableAudioFromGesture(allowSandbox = false): Promise<boolean> {
+  const ready = await audioNotifier.activateFromGesture(allowSandbox);
+  updateAudioUi();
+  return ready;
+}
+
+function requestTestAudio(cue: AudioCue): void {
+  void audioNotifier.playTestCue(cue)
+    .then((result) => {
+      updateAudioUi();
+      reportTestAudio(cue, result);
+    })
+    .catch(() => {
+      updateAudioUi();
+      reportTestAudio(cue, 'unavailable');
+    });
+}
+
 applySettings();
 
 settingsToggle.addEventListener('click', () => {
@@ -1201,6 +1507,41 @@ eewAutoFocusToggle.addEventListener('change', () => {
   settings = { ...settings, eewAutoFocusEnabled: eewAutoFocusToggle.checked };
   applySettings();
 }, { signal: lifecycle.signal });
+
+audioNotificationsToggle.addEventListener('change', () => {
+  settings = { ...settings, audioNotificationsEnabled: audioNotificationsToggle.checked };
+  applySettings();
+  if (audioNotificationsToggle.checked && !isEewSandbox) void enableAudioFromGesture();
+}, { signal: lifecycle.signal });
+
+eewAudioToggle.addEventListener('change', () => {
+  settings = { ...settings, eewAudioEnabled: eewAudioToggle.checked };
+  applySettings();
+}, { signal: lifecycle.signal });
+
+shakeAudioToggle.addEventListener('change', () => {
+  settings = { ...settings, shakeAudioEnabled: shakeAudioToggle.checked };
+  applySettings();
+}, { signal: lifecycle.signal });
+
+earthquakeAudioToggle.addEventListener('change', () => {
+  settings = { ...settings, earthquakeAudioEnabled: earthquakeAudioToggle.checked };
+  applySettings();
+}, { signal: lifecycle.signal });
+
+audioVolume.addEventListener('input', () => {
+  const value = Number(audioVolume.value);
+  settings = { ...settings, audioVolume: Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : DEFAULT_SETTINGS.audioVolume };
+  applySettings();
+}, { signal: lifecycle.signal });
+
+audioEnableButton.addEventListener('click', () => {
+  void enableAudioFromGesture(isEewSandbox);
+}, { signal: lifecycle.signal });
+
+audioTestEarthquake.addEventListener('click', () => requestTestAudio('earthquake'), { signal: lifecycle.signal });
+audioTestShake.addEventListener('click', () => requestTestAudio('shake'), { signal: lifecycle.signal });
+audioTestEew.addEventListener('click', () => requestTestAudio('eew'), { signal: lifecycle.signal });
 
 function setTestPanelOpen(open: boolean): void {
   if (!testPanel || !testPanelToggle) return;
@@ -1241,6 +1582,10 @@ function setTestControlsEnabled(enabled: boolean): void {
 
 function resetTestState(): void {
   testEarthquakeSequence = 0;
+  audioNotifier.clearPending();
+  earthquakeReceiveTimings.clear();
+  earthquakeReceiveTimingOrder.length = 0;
+  lastWebSocketReceivedAt = null;
   selectedEarthquakeId = null;
   connectionEstablished = false;
   reconnectAttempt = 0;
@@ -1267,31 +1612,31 @@ function runTestAction(action: string): void {
       handleIncomingPayload(testFixtures.createTestEarthquake(testEarthquakeSequence), 'test');
       break;
     case 'shake-start':
-      handleIncomingPayload(testFixtures.testShakeStart, 'test');
+      handleIncomingPayload(testFixtures.createTestShakeStart(), 'test');
       break;
     case 'shake-update':
-      handleIncomingPayload(testFixtures.testShakeUpdate, 'test');
+      handleIncomingPayload(testFixtures.createTestShakeUpdate(), 'test');
       break;
     case 'shake-end':
-      handleIncomingPayload(testFixtures.testShakeEnd, 'test');
+      handleIncomingPayload(testFixtures.createTestShakeEnd(), 'test');
       break;
     case 'eew-1':
-      handleIncomingPayload(testFixtures.testEewReport1, 'test');
+      handleIncomingPayload(testFixtures.createTestEewReport1(), 'test');
       break;
     case 'eew-2':
-      handleIncomingPayload(testFixtures.testEewReport2, 'test');
+      handleIncomingPayload(testFixtures.createTestEewReport2(), 'test');
       break;
     case 'eew-3':
-      handleIncomingPayload(testFixtures.testEewReport3, 'test');
+      handleIncomingPayload(testFixtures.createTestEewReport3(), 'test');
       break;
     case 'eew-old':
-      handleIncomingPayload(testFixtures.testEewOldReport1, 'test');
+      handleIncomingPayload(testFixtures.createTestEewOldReport1(), 'test');
       break;
     case 'eew-missing':
-      handleIncomingPayload(testFixtures.testEewMissingEarthquake, 'test');
+      handleIncomingPayload(testFixtures.createTestEewMissingEarthquake(), 'test');
       break;
     case 'eew-cancel':
-      handleIncomingPayload(testFixtures.testEewCancelled, 'test');
+      handleIncomingPayload(testFixtures.createTestEewCancelled(), 'test');
       break;
     case 'connection-live':
       testConnectionAdapter.setState('live');
@@ -1357,11 +1702,13 @@ async function loadHistory(reason: 'startup' | 'retry' | 'reconnect'): Promise<v
       currentReason = reason === 'startup' ? 'startup' : reason;
       try {
         const earthquakes = await fetchRecentEarthquakes(controller.signal);
+        const browserReceivedAt = Date.now();
         if (disposed) return;
+        rememberHistoryReceiveTimings(earthquakes, browserReceivedAt);
         if (store.merge(earthquakes) || !hasLoaded) renderAll();
         hasLoaded = true;
         document.querySelector('#refresh-error')?.remove();
-        updateTimestamp(currentReason === 'reconnect' ? '再接続後に同期' : '最終更新');
+        updateTimestamp(currentReason === 'reconnect' ? '再接続後の履歴受信' : '履歴受信');
       } catch (error) {
         if (disposed || (error instanceof DOMException && error.name === 'AbortError')) return;
         const message = error instanceof Error ? error.message : '通信に失敗しました';
@@ -1392,34 +1739,52 @@ async function loadHistory(reason: 'startup' | 'retry' | 'reconnect'): Promise<v
 
 type IncomingPayloadSource = 'websocket' | 'test';
 
-function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource = 'websocket'): void {
+function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource = 'websocket', browserReceivedAt = Date.now()): void {
+  lastWebSocketReceivedAt = browserReceivedAt;
   const parsedEew = parseEew(payload);
   if (parsedEew) {
-    const result = updateEew(parsedEew);
+    const receiveTiming = createReceiveTiming(payload, browserReceivedAt, parsedEew.issue.time);
+    const result = updateEew(parsedEew, receiveTiming);
+    if (result === 'new' && settings.eewAudioEnabled) notifyAudio('eew');
+    if (result === 'cancelled' && settings.eewAudioEnabled) notifyAudio('cancel');
     if (source === 'test') {
+      if (result !== 'disabled') addTestTimingLog(`556 serial ${parsedEew.issue.serial}`, receiveTiming);
       if (result === 'ignored-old') addTestLog(`ignored old serial ${parsedEew.issue.serial} (eventId ${parsedEew.issue.eventId})`);
-      else if (result === 'duplicate') addTestLog(`duplicate EEW id ${parsedEew.id}`);
+      else if (result === 'duplicate') {
+        addTestLog(`duplicate EEW id ${parsedEew.id}`);
+        addTestLog('audio suppressed: duplicate/update');
+      }
       else if (result === 'cancelled') addTestLog(`EEW cancelled (eventId ${parsedEew.issue.eventId})`);
       else if (result === 'ignored-cancelled') addTestLog(`ignored cancelled EEW (eventId ${parsedEew.issue.eventId})`);
       else if (result === 'disabled') addTestLog('EEW display is OFF; payload ignored');
+      else if (result === 'updated') {
+        addTestLog(`EEW eventId ${parsedEew.issue.eventId} serial ${parsedEew.issue.serial}`);
+        addTestLog('audio suppressed: EEW update');
+      }
       else addTestLog(`EEW eventId ${parsedEew.issue.eventId} serial ${parsedEew.issue.serial}`);
     }
+    updateReceiveAgeDisplays();
     return;
   }
 
   // 554 only signals that an EEW publication was detected. It is not an EEW payload.
   if (parseEewDetection(payload)) {
     if (source === 'test') addTestLog('554 EEW publication detected (display not started)');
+    updateReceiveAgeDisplays();
     return;
   }
 
   const parsedShakeDetection = parseShakeDetection(payload);
   if (parsedShakeDetection) {
-    updateShakeDetection(parsedShakeDetection);
+    const receiveTiming = createReceiveTiming(payload, browserReceivedAt, parsedShakeDetection.updatedAt);
+    const shakeResult = updateShakeDetection(parsedShakeDetection, receiveTiming);
+    if (shakeResult === 'started' && settings.shakeAudioEnabled) notifyAudio('shake');
     if (source === 'test') {
-      const state = parsedShakeDetection.count > 0 && parsedShakeDetection.confidence > 0 ? 'updated' : 'ended';
-      addTestLog(`9611 ${state}: count ${parsedShakeDetection.count}, confidence ${parsedShakeDetection.confidence}`);
+      addTestTimingLog('9611', receiveTiming, '解析更新→受信');
+      addTestLog(`9611 ${shakeResult}: count ${parsedShakeDetection.count}, confidence ${parsedShakeDetection.confidence}`);
+      if (shakeResult === 'updated') addTestLog('audio suppressed: shake update');
     }
+    updateReceiveAgeDisplays();
     return;
   }
 
@@ -1427,18 +1792,29 @@ function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource =
   // compatibility, but never becomes a detection trigger by itself.
   if (parseUserquake(payload)) {
     if (source === 'test') addTestLog('561 individual sensing received (display not started)');
+    updateReceiveAgeDisplays();
     return;
   }
 
   const earthquake = parseEarthquake(payload);
   if (!earthquake) return;
+  const receiveTiming = createReceiveTiming(payload, browserReceivedAt, payloadString(payload, 'issue', 'time'));
   if (!store.merge([earthquake])) {
-    if (source === 'test') addTestLog(`551 duplicate ignored: ${earthquake.id}`);
+    if (source === 'test') {
+      addTestLog(`551 duplicate ignored: ${earthquake.id}`);
+      addTestLog('audio suppressed: duplicate');
+    }
     return;
   }
+  rememberEarthquakeReceiveTiming(earthquake.id, receiveTiming);
   renderAll(true);
-  updateTimestamp(source === 'test' ? 'テスト受信' : '最終受信');
-  if (source === 'test') addTestLog(`551 earthquake ${earthquake.id}`);
+  updateTimestamp(source === 'test' ? 'テスト受信' : '地震情報受信');
+  if (settings.earthquakeAudioEnabled) notifyAudio('earthquake');
+  if (source === 'test') {
+    addTestTimingLog('551', receiveTiming);
+    addTestLog(`551 earthquake ${earthquake.id}`);
+  }
+  updateReceiveAgeDisplays();
 }
 
 function scheduleReconnect(): void {
@@ -1477,6 +1853,9 @@ function connectWebSocket(): void {
   };
 
   connection.onmessage = (event: MessageEvent) => {
+    const browserReceivedAt = Date.now();
+    lastWebSocketReceivedAt = browserReceivedAt;
+    updateReceiveAgeDisplays();
     if (disposed || socket !== connection || typeof event.data !== 'string') return;
     let payload: unknown;
     try {
@@ -1485,7 +1864,7 @@ function connectWebSocket(): void {
       return;
     }
 
-    handleIncomingPayload(payload);
+    handleIncomingPayload(payload, 'websocket', browserReceivedAt);
   };
 
   connection.onerror = () => {
@@ -1536,6 +1915,8 @@ window.addEventListener('pagehide', () => {
   historyController?.abort();
   if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
   reconnectTimer = undefined;
+  if (receiveAgeTimer !== undefined) window.clearInterval(receiveAgeTimer);
+  receiveAgeTimer = undefined;
   if (shakeDetectionTimer !== undefined) window.clearTimeout(shakeDetectionTimer);
   shakeDetectionTimer = undefined;
   if (mapDragFrame !== undefined) window.cancelAnimationFrame(mapDragFrame);
@@ -1544,8 +1925,11 @@ window.addEventListener('pagehide', () => {
   japanMap.classList.remove('is-dragging');
   clearEewTimer();
   eewByEventId.clear();
+  earthquakeReceiveTimings.clear();
+  earthquakeReceiveTimingOrder.length = 0;
   activeEew = null;
   activeEewEventId = null;
+  audioNotifier.dispose();
   if (socket) {
     const oldSocket = socket;
     socket = null;
@@ -1557,6 +1941,8 @@ window.addEventListener('pagehide', () => {
   }
   setConnectionState('offline');
 }, { once: true, signal: lifecycle.signal });
+
+startReceiveAgeTimer();
 
 if (isTestMode) {
   void initializeTestMode();
