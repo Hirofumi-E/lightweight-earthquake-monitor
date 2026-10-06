@@ -1047,7 +1047,9 @@ function escapeHtml(value: string): string {
 }
 
 async function loadHistory(reason: 'startup' | 'retry' | 'reconnect'): Promise<void> {
-  if (disposed) return;
+  // TEST MODE is completely offline. Keep this guard at the HTTP boundary so
+  // future callers cannot accidentally fetch production history.
+  if (isTestMode || disposed) return;
   if (historyRequestInFlight) {
     if (reason === 'reconnect') queuedHistorySync = true;
     return;
@@ -1148,7 +1150,8 @@ function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource =
 }
 
 function scheduleReconnect(): void {
-  if (disposed || reconnectTimer !== undefined) return;
+  // A test session must never schedule production reconnect work.
+  if (isTestMode || disposed || reconnectTimer !== undefined) return;
   setConnectionState(connectionEstablished ? 'reconnecting' : 'offline');
   const delay = Math.min(1_000 * 2 ** reconnectAttempt, 30_000);
   reconnectAttempt += 1;
@@ -1159,7 +1162,9 @@ function scheduleReconnect(): void {
 }
 
 function connectWebSocket(): void {
-  if (disposed || (socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN))) return;
+  // Keep the mode check inside the connection boundary as well as in the
+  // startup branch. This prevents accidental calls from timers or listeners.
+  if (isTestMode || disposed || (socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN))) return;
   setConnectionState(connectionEstablished ? 'reconnecting' : 'offline');
   let connection: WebSocket;
   try {
@@ -1207,18 +1212,30 @@ function connectWebSocket(): void {
 }
 
 async function initializeTestMode(): Promise<void> {
+  if (!isTestMode || disposed) return;
   setConnectionState('offline');
   renderAll();
   updateTimestamp('テスト待機');
   setTestControlsEnabled(false);
   try {
     testFixtures = await import('./testFixtures/fixtures');
+    if (disposed) return;
     setTestControlsEnabled(true);
     clearTestLogs();
     addTestLog('TEST MODE ready: 疑似データのみ');
   } catch {
     addTestLog('fixtureの読み込みに失敗しました');
   }
+}
+
+function initializeProductionMode(): void {
+  if (isTestMode || disposed) return;
+  void loadHistory('startup').finally(() => {
+    // Keep the production startup path isolated from TEST MODE. The guards in
+    // loadHistory/connectWebSocket are an additional safety net for future
+    // callers and asynchronous callbacks.
+    if (!isTestMode && !disposed) connectWebSocket();
+  });
 }
 
 window.addEventListener('pagehide', () => {
@@ -1248,7 +1265,5 @@ window.addEventListener('pagehide', () => {
 if (isTestMode) {
   void initializeTestMode();
 } else {
-  void loadHistory('startup').finally(() => {
-    if (!disposed) connectWebSocket();
-  });
+  initializeProductionMode();
 }
