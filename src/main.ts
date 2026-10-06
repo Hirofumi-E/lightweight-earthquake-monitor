@@ -132,11 +132,6 @@ app.innerHTML = `
       </aside>
       <section class="map-panel" aria-label="日本地図と震源">
         <div class="map-legend" aria-label="地図の凡例"><span><i class="legend-eew"></i>EEW予測</span><span><i class="legend-current"></i>最新の震源</span><span><i class="legend-detection"></i>揺れ検出地域</span><span><i class="legend-past"></i>過去の震源</span></div>
-        <div class="map-controls" aria-label="地図操作">
-          <button id="map-zoom-in" type="button" aria-label="地図を拡大" title="拡大">＋</button>
-          <button id="map-zoom-out" type="button" aria-label="地図を縮小" title="縮小">−</button>
-          <button id="map-reset" type="button" aria-label="日本全国を表示" title="全国">全国</button>
-        </div>
         <svg id="japan-map" class="japan-map" viewBox="0 0 800 800" role="img" aria-label="日本の都道府県地図と最近の震源位置">
           <image href="${japanMapUrl}" width="800" height="800" />
           <g id="eew-prefecture-overlays" class="eew-prefecture-overlays" aria-label="EEW予測震度" />
@@ -147,6 +142,11 @@ app.innerHTML = `
           </g>
           <g id="eew-marker" class="eew-marker" aria-label="EEW震源" />
         </svg>
+        <div class="map-controls" aria-label="地図操作">
+          <button id="map-zoom-in" type="button" aria-label="地図を拡大" title="拡大">＋</button>
+          <button id="map-zoom-out" type="button" aria-label="地図を縮小" title="縮小">−</button>
+          <button id="map-reset" type="button" aria-label="日本全国を表示" title="全国">全国</button>
+        </div>
         <p class="map-attribution">地図：気象庁「地震情報／都道府県等」のデータを加工して作成</p>
         <p id="map-status" class="map-status">地震情報を取得しています</p>
         ${isTestMode ? `
