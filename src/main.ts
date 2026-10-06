@@ -178,7 +178,7 @@ app.innerHTML = `
             <strong>緊急地震速報は取り消されました</strong>
             <small>P2P地震情報経由・参考情報</small>
           </article>
-          <div class="panel-update"><span>情報状態</span><span id="updated-at">取得準備中</span></div>
+          <div class="panel-update"><span>現在時刻</span><time id="current-time">—</time></div>
         </section>
         <section class="history-panel" aria-labelledby="history-heading">
           <div class="panel-section-heading"><div><h2 id="history-heading">地震履歴</h2><p>最近の情報 最大10件</p></div><span id="event-count" class="event-count">—</span></div>
@@ -257,7 +257,7 @@ app.innerHTML = `
 
 const latestCard = document.querySelector<HTMLElement>('#latest-card')!;
 const list = document.querySelector<HTMLDivElement>('#earthquake-list')!;
-const updatedAt = document.querySelector<HTMLSpanElement>('#updated-at')!;
+const currentTime = document.querySelector<HTMLTimeElement>('#current-time')!;
 const eventCount = document.querySelector<HTMLSpanElement>('#event-count')!;
 const latestLoading = document.querySelector<HTMLDivElement>('#latest-loading')!;
 const latestDetails = document.querySelector<HTMLElement>('#latest-details')!;
@@ -569,6 +569,20 @@ function renderEewReceiveMetrics(timing: ReceiveTiming | null): void {
   eewSourceLatency.textContent = formatLatency(timing.sourceToBrowser);
 }
 
+const tokyoClockFormatter = new Intl.DateTimeFormat('ja-JP', {
+  timeZone: 'Asia/Tokyo',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+});
+
+function updateCurrentTime(): void {
+  const now = new Date();
+  currentTime.textContent = tokyoClockFormatter.format(now);
+  currentTime.dateTime = now.toISOString();
+}
+
 function updateReceiveAgeDisplays(): void {
   const latest = store.recent[0];
   const latestTiming = latest ? earthquakeReceiveTimings.get(latest.id) : undefined;
@@ -582,6 +596,7 @@ function updateReceiveAgeDisplays(): void {
   monitorLatestQuake.textContent = latestTiming ? formatAge(latestTiming.browserReceivedAt) : '待機中';
   latestReceivedAge.textContent = latestTiming ? formatAge(latestTiming.browserReceivedAt) : '待機中';
   if (activeEew) eewReceivedAge.textContent = formatAge(activeEew.receiveTiming.browserReceivedAt);
+  updateCurrentTime();
 }
 
 function startReceiveAgeTimer(): void {
@@ -1373,10 +1388,6 @@ function setConnectionState(state: 'live' | 'reconnecting' | 'offline'): void {
   monitorConnection.textContent = state === 'live' ? 'LIVE' : state === 'reconnecting' ? 'RECONNECTING' : 'OFFLINE';
 }
 
-function updateTimestamp(prefix = '状態表示'): void {
-  updatedAt.textContent = `${prefix} ${new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
-}
-
 function flushMapDrag(): void {
   if (!mapDragState) return;
   const delta = viewBoxDeltaFromPixels(mapDragState.pendingClientX, mapDragState.pendingClientY);
@@ -1597,7 +1608,6 @@ function resetTestState(): void {
   clearEewState();
   resetMapView();
   renderAll();
-  updateTimestamp('テストリセット');
   setConnectionState('offline');
   clearTestLogs();
   addTestLog('全状態リセット');
@@ -1695,11 +1705,9 @@ async function loadHistory(reason: 'startup' | 'retry' | 'reconnect'): Promise<v
   historyRequestInFlight = true;
   const controller = new AbortController();
   historyController = controller;
-  let currentReason = reason;
   try {
     do {
       queuedHistorySync = false;
-      currentReason = reason === 'startup' ? 'startup' : reason;
       try {
         const earthquakes = await fetchRecentEarthquakes(controller.signal);
         const browserReceivedAt = Date.now();
@@ -1708,7 +1716,6 @@ async function loadHistory(reason: 'startup' | 'retry' | 'reconnect'): Promise<v
         if (store.merge(earthquakes) || !hasLoaded) renderAll();
         hasLoaded = true;
         document.querySelector('#refresh-error')?.remove();
-        updateTimestamp(currentReason === 'reconnect' ? '再接続後の履歴受信' : '履歴受信');
       } catch (error) {
         if (disposed || (error instanceof DOMException && error.name === 'AbortError')) return;
         const message = error instanceof Error ? error.message : '通信に失敗しました';
@@ -1719,7 +1726,6 @@ async function loadHistory(reason: 'startup' | 'retry' | 'reconnect'): Promise<v
           list.innerHTML = '<div class="empty-state">通信が回復すると地震情報を表示します</div>';
           document.querySelector<HTMLButtonElement>('#retry-button')?.addEventListener('click', () => void loadHistory('retry'), { once: true, signal: lifecycle.signal });
         } else {
-          updatedAt.textContent = currentReason === 'reconnect' ? '切断中の履歴を取得できませんでした' : '履歴取得に失敗しました';
           let notice = document.querySelector<HTMLDivElement>('#refresh-error');
           if (!notice) {
             notice = document.createElement('div');
@@ -1808,7 +1814,6 @@ function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource =
   }
   rememberEarthquakeReceiveTiming(earthquake.id, receiveTiming);
   renderAll(true);
-  updateTimestamp(source === 'test' ? 'テスト受信' : '地震情報受信');
   if (settings.earthquakeAudioEnabled) notifyAudio('earthquake');
   if (source === 'test') {
     addTestTimingLog('551', receiveTiming);
@@ -1886,7 +1891,6 @@ async function initializeTestMode(): Promise<void> {
   if (!isTestMode || disposed) return;
   setConnectionState('offline');
   renderAll();
-  updateTimestamp('テスト待機');
   setTestControlsEnabled(false);
   try {
     testFixtures = await import('./testFixtures/fixtures');
