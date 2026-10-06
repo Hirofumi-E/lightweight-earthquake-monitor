@@ -1,4 +1,15 @@
-import type { Earthquake, P2PQuake, P2PUserquake, P2PUserquakeEvaluation, ShakeDetection } from './types';
+import type {
+  Earthquake,
+  EewArea,
+  EewDetection,
+  EewMessage,
+  P2PEEW,
+  P2PEEWDetection,
+  P2PQuake,
+  P2PUserquake,
+  P2PUserquakeEvaluation,
+  ShakeDetection,
+} from './types';
 
 const API_URL = 'https://api.p2pquake.net/v2/history?codes=551&limit=10';
 
@@ -81,6 +92,117 @@ export function parseShakeDetection(value: unknown): ShakeDetection | null {
     updatedAt,
     areaConfidences,
   };
+}
+
+/** Parse an EEW (code 556) without assuming that cancelled messages contain an earthquake. */
+export function parseEew(value: unknown): EewMessage | null {
+  if (!isRecord(value) || value.code !== 556 || typeof value.id !== 'string' || value.id.length === 0) return null;
+  const item = value as unknown as P2PEEW;
+  if (typeof item.time !== 'string' || item.time.length === 0 || typeof item.cancelled !== 'boolean') return null;
+
+  const issue = item.issue;
+  if (
+    !isRecord(issue) ||
+    typeof issue.time !== 'string' ||
+    issue.time.length === 0 ||
+    typeof issue.eventId !== 'string' ||
+    issue.eventId.length === 0
+  ) return null;
+  const serial = normalizeSerial(issue.serial);
+  if (serial === null) return null;
+
+  const earthquake = parseEewEarthquake(item.earthquake);
+  const areas = parseEewAreas(item.areas);
+  const id = item.id as string;
+  const time = item.time as string;
+  const cancelled = item.cancelled as boolean;
+  return {
+    id,
+    code: 556,
+    time,
+    test: item.test === true,
+    cancelled,
+    issue: { time: issue.time, eventId: issue.eventId, serial },
+    earthquake,
+    areas,
+  };
+}
+
+/** Parse EEW publication detection (code 554) without starting EEW display. */
+export function parseEewDetection(value: unknown): EewDetection | null {
+  if (!isRecord(value) || value.code !== 554 || typeof value.id !== 'string' || value.id.length === 0) return null;
+  const item = value as unknown as P2PEEWDetection;
+  if (typeof item.time !== 'string' || item.time.length === 0) return null;
+  const id = item.id as string;
+  const time = item.time as string;
+  return { id, code: 554, time, type: typeof item.type === 'string' ? item.type : null };
+}
+
+function parseEewEarthquake(value: unknown): EewMessage['earthquake'] {
+  if (!isRecord(value)) return undefined;
+  const hypocenter = isRecord(value.hypocenter) ? value.hypocenter : {};
+  return {
+    originTime: stringOrNull(value.originTime),
+    arrivalTime: stringOrNull(value.arrivalTime),
+    condition: stringOrNull(value.condition),
+    hypocenter: {
+      name: stringOrNull(hypocenter.name),
+      reduceName: stringOrNull(hypocenter.reduceName),
+      latitude: eewCoordinate(hypocenter.latitude),
+      longitude: eewCoordinate(hypocenter.longitude),
+      depth: eewValue(hypocenter.depth, -1),
+      magnitude: eewValue(hypocenter.magnitude, -1),
+    },
+  };
+}
+
+function parseEewAreas(value: unknown): EewArea[] {
+  if (!Array.isArray(value)) return [];
+  const areas: EewArea[] = [];
+  for (const rawArea of value) {
+    if (!isRecord(rawArea) || typeof rawArea.pref !== 'string' || rawArea.pref.length === 0 || typeof rawArea.name !== 'string' || rawArea.name.length === 0) continue;
+    areas.push({
+      pref: rawArea.pref,
+      name: rawArea.name,
+      scaleFrom: eewScaleValue(rawArea.scaleFrom),
+      scaleTo: eewScaleValue(rawArea.scaleTo),
+      kindCode: normalizeKindCode(rawArea.kindCode),
+      arrivalTime: stringOrNull(rawArea.arrivalTime),
+    });
+  }
+  return areas;
+}
+
+function normalizeSerial(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return String(value);
+  return null;
+}
+
+function normalizeKindCode(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return String(value);
+  return null;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function eewValue(value: unknown, sentinel?: number): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return sentinel !== undefined && value === sentinel ? null : value;
+}
+
+function eewCoordinate(value: unknown): number | null {
+  return eewValue(value, -200);
+}
+
+function eewScaleValue(value: unknown): number | null {
+  const normalized = eewValue(value);
+  if (normalized === null) return null;
+  const integer = Math.trunc(normalized);
+  return integer === -1 || [0, 10, 20, 30, 40, 45, 50, 55, 60, 70, 99].includes(integer) ? integer : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,9 +1,9 @@
 import './style.css';
-import { fetchRecentEarthquakes, parseEarthquake, parseShakeDetection, parseUserquake } from './api';
+import { fetchRecentEarthquakes, parseEarthquake, parseEew, parseEewDetection, parseShakeDetection, parseUserquake } from './api';
 import { EarthquakeStore } from './earthquakeStore';
 import { MAP_VIEWBOX, projectCoordinates, projectEpicenter } from './mapProjection';
 import areasData from './epspAreas.json';
-import type { Earthquake, EpspArea, ShakeDetection } from './types';
+import type { Earthquake, EewArea, EewMessage, EpspArea, ShakeDetection } from './types';
 
 const japanMapUrl = new URL('./assets/japan-map.svg', import.meta.url).href;
 const epspAreas = areasData as EpspArea[];
@@ -16,16 +16,35 @@ for (const area of epspAreas) {
 const SETTINGS_STORAGE_KEY = 'lightweight-earthquake-monitor.settings';
 const DETECTION_TIMEOUT_MS = 30_000;
 const HIGH_CONFIDENCE_THRESHOLD = 0.8;
+const EEW_TIMEOUT_MS = 120_000;
+const EEW_CANCEL_DISPLAY_MS = 5_000;
+const MAX_EEW_EVENTS = 4;
+const EEW_SCALE_CODES = new Set([0, 10, 20, 30, 40, 45, 50, 55, 60, 70, 99]);
+const isEewSandbox = new URLSearchParams(window.location.search).get('eewSandbox') === '1';
+const websocketUrl = isEewSandbox ? 'wss://api-realtime-sandbox.p2pquake.net/v2/ws' : 'wss://api.p2pquake.net/v2/ws';
+
+const PREFECTURE_NAMES = [
+  '北海道', '青森県', '岩手県', '宮城県', '秋田県', '山形県', '福島県', '茨城県', '栃木県', '群馬県',
+  '埼玉県', '千葉県', '東京都', '神奈川県', '新潟県', '富山県', '石川県', '福井県', '山梨県', '長野県',
+  '岐阜県', '静岡県', '愛知県', '三重県', '滋賀県', '京都府', '大阪府', '兵庫県', '奈良県', '和歌山県',
+  '鳥取県', '島根県', '岡山県', '広島県', '山口県', '徳島県', '香川県', '愛媛県', '高知県', '福岡県',
+  '佐賀県', '長崎県', '熊本県', '大分県', '宮崎県', '鹿児島県', '沖縄県',
+] as const;
+const PREFECTURE_CODE_BY_NAME = new Map<string, string>(PREFECTURE_NAMES.map((name, index) => [name, String(index + 1).padStart(2, '0')]));
 
 interface MonitorSettings {
   shakeDetectionEnabled: boolean;
   autoFocusEnabled: boolean;
+  eewEnabled: boolean;
+  eewAutoFocusEnabled: boolean;
   realtimeIntensityEnabled: false;
 }
 
 const DEFAULT_SETTINGS: MonitorSettings = {
   shakeDetectionEnabled: true,
   autoFocusEnabled: true,
+  eewEnabled: true,
+  eewAutoFocusEnabled: true,
   realtimeIntensityEnabled: false,
 };
 
@@ -36,6 +55,7 @@ app.innerHTML = `
   <div class="shell">
     <header class="topbar">
       <h1 class="brand">Lightweight Earthquake Monitor</h1>
+      <div id="sandbox-banner" class="sandbox-banner" ${isEewSandbox ? '' : 'hidden'} role="status"><strong>SANDBOX</strong><span>過去の情報を再生中</span></div>
       <div class="header-actions">
         <div id="shake-status" class="shake-status" role="status" aria-live="polite" hidden>
           <span class="shake-status-label">揺れを検出しています</span>
@@ -55,6 +75,14 @@ app.innerHTML = `
         <span><strong>揺れ検出時に対象地域へ自動フォーカス</strong><small>信頼度Aの地域へ一時移動</small></span>
         <input id="auto-focus-toggle" class="settings-checkbox" type="checkbox" checked />
       </label>
+      <label class="settings-row">
+        <span><strong>EEW表示</strong><small>556 緊急地震速報を表示</small></span>
+        <input id="eew-toggle" class="settings-checkbox" type="checkbox" checked />
+      </label>
+      <label class="settings-row">
+        <span><strong>EEW受信時に震源へ自動フォーカス</strong><small>新しいeventIdで一度だけ移動</small></span>
+        <input id="eew-auto-focus-toggle" class="settings-checkbox" type="checkbox" checked />
+      </label>
       <div class="settings-row is-disabled">
         <span><strong>リアルタイム震度</strong><small>データソース準備中</small></span>
         <input class="settings-checkbox" type="checkbox" disabled aria-label="リアルタイム震度（データソース準備中）" />
@@ -64,8 +92,8 @@ app.innerHTML = `
     </header>
     <main class="workspace">
       <aside class="information-panel" aria-label="最新地震情報と地震履歴">
-        <section id="latest-card" class="latest-panel" aria-label="最新の地震情報" aria-live="polite">
-          <div class="panel-section-heading"><h2>最新の地震</h2><span class="latest-indicator"><i></i>最新</span></div>
+        <section id="latest-card" class="latest-panel" aria-label="最新地震情報と緊急地震速報" aria-live="polite">
+          <div class="panel-section-heading"><h2 id="latest-heading">最新の地震</h2><span class="latest-indicator"><i></i><span id="latest-indicator-label">最新</span></span></div>
           <div id="latest-loading" class="loading"><span class="spinner"></span>地震情報を取得しています</div>
           <article id="latest-details" class="latest-details" hidden>
             <div class="latest-intensity-label">最大震度</div>
@@ -73,6 +101,22 @@ app.innerHTML = `
             <strong id="latest-place-name" class="latest-place">—</strong>
             <time id="latest-date" class="latest-time">—</time>
             <div class="latest-measures"><span id="latest-magnitude">M —</span><span id="latest-depth">深さ —</span></div>
+          </article>
+          <article id="eew-details" class="eew-details" hidden>
+            <div class="eew-heading-row"><strong>緊急地震速報</strong><span id="eew-test-badge" class="eew-test-badge" hidden>TEST / 訓練・試験情報</span></div>
+            <strong id="eew-report" class="eew-report">第—報</strong>
+            <div class="eew-place-label">震源</div>
+            <strong id="eew-place-name" class="eew-place">—</strong>
+            <time id="eew-origin-time" class="eew-time">—</time>
+            <div class="eew-measures"><span id="eew-magnitude">M —</span><span id="eew-depth">深さ —</span></div>
+            <div class="eew-forecast"><span>最大予測震度</span><strong id="eew-scale">—</strong></div>
+            <div id="eew-arrival-state" class="eew-arrival-state" hidden></div>
+            <div id="eew-forecast-areas" class="eew-forecast-areas" hidden></div>
+            <small class="eew-disclaimer">P2P地震情報経由・参考情報</small>
+          </article>
+          <article id="eew-cancelled" class="eew-cancelled" hidden>
+            <strong>緊急地震速報は取り消されました</strong>
+            <small>P2P地震情報経由・参考情報</small>
           </article>
           <div class="panel-update"><span>情報状態</span><span id="updated-at">取得準備中</span></div>
         </section>
@@ -82,14 +126,16 @@ app.innerHTML = `
         </section>
       </aside>
       <section class="map-panel" aria-label="日本地図と震源">
-        <div class="map-legend" aria-label="地図の凡例"><span><i class="legend-current"></i>最新の震源</span><span><i class="legend-detection"></i>揺れ検出地域</span><span><i class="legend-past"></i>過去の震源</span></div>
+        <div class="map-legend" aria-label="地図の凡例"><span><i class="legend-eew"></i>EEW予測</span><span><i class="legend-current"></i>最新の震源</span><span><i class="legend-detection"></i>揺れ検出地域</span><span><i class="legend-past"></i>過去の震源</span></div>
         <svg id="japan-map" class="japan-map" viewBox="0 0 800 800" role="img" aria-label="日本の都道府県地図と最近の震源位置">
           <image href="${japanMapUrl}" width="800" height="800" />
+          <g id="eew-prefecture-overlays" class="eew-prefecture-overlays" aria-label="EEW予測震度" />
           <g id="earthquake-markers" class="earthquake-markers" aria-label="最近の震源">
             <g id="historical-earthquake-markers" aria-label="過去の震源" />
             <g id="shake-detection-markers" class="shake-detection-markers" aria-label="揺れ検出地域" />
             <g id="latest-earthquake-marker" aria-label="最新の震源" />
           </g>
+          <g id="eew-marker" class="eew-marker" aria-label="EEW震源" />
         </svg>
         <p class="map-attribution">地図：気象庁「地震情報／都道府県等」のデータを加工して作成</p>
         <p id="map-status" class="map-status">地震情報を取得しています</p>
@@ -103,15 +149,30 @@ const updatedAt = document.querySelector<HTMLSpanElement>('#updated-at')!;
 const eventCount = document.querySelector<HTMLSpanElement>('#event-count')!;
 const latestLoading = document.querySelector<HTMLDivElement>('#latest-loading')!;
 const latestDetails = document.querySelector<HTMLElement>('#latest-details')!;
+const latestHeading = document.querySelector<HTMLElement>('#latest-heading')!;
+const latestIndicatorLabel = document.querySelector<HTMLElement>('#latest-indicator-label')!;
 const latestScale = document.querySelector<HTMLElement>('#latest-scale')!;
 const latestPlace = document.querySelector<HTMLElement>('#latest-place-name')!;
 const latestDate = document.querySelector<HTMLElement>('#latest-date')!;
 const latestMagnitude = document.querySelector<HTMLElement>('#latest-magnitude')!;
 const latestDepth = document.querySelector<HTMLElement>('#latest-depth')!;
+const eewDetails = document.querySelector<HTMLElement>('#eew-details')!;
+const eewTestBadge = document.querySelector<HTMLElement>('#eew-test-badge')!;
+const eewReport = document.querySelector<HTMLElement>('#eew-report')!;
+const eewPlaceName = document.querySelector<HTMLElement>('#eew-place-name')!;
+const eewOriginTime = document.querySelector<HTMLElement>('#eew-origin-time')!;
+const eewMagnitude = document.querySelector<HTMLElement>('#eew-magnitude')!;
+const eewDepth = document.querySelector<HTMLElement>('#eew-depth')!;
+const eewScale = document.querySelector<HTMLElement>('#eew-scale')!;
+const eewArrivalState = document.querySelector<HTMLElement>('#eew-arrival-state')!;
+const eewForecastAreas = document.querySelector<HTMLElement>('#eew-forecast-areas')!;
+const eewCancelled = document.querySelector<HTMLElement>('#eew-cancelled')!;
 const japanMap = document.querySelector<SVGSVGElement>('#japan-map')!;
+const eewPrefectureOverlays = document.querySelector<SVGGElement>('#eew-prefecture-overlays')!;
 const shakeDetectionMarkers = document.querySelector<SVGGElement>('#shake-detection-markers')!;
 const historicalEarthquakeMarkers = document.querySelector<SVGGElement>('#historical-earthquake-markers')!;
 const latestEarthquakeMarker = document.querySelector<SVGGElement>('#latest-earthquake-marker')!;
+const eewMarker = document.querySelector<SVGGElement>('#eew-marker')!;
 const mapStatus = document.querySelector<HTMLParagraphElement>('#map-status')!;
 const connectionStatus = document.querySelector<HTMLDivElement>('#connection-status')!;
 const connectionLabel = document.querySelector<HTMLSpanElement>('#connection-label')!;
@@ -121,6 +182,8 @@ const settingsToggle = document.querySelector<HTMLButtonElement>('#settings-togg
 const settingsPanel = document.querySelector<HTMLElement>('#settings-panel')!;
 const shakeDetectionToggle = document.querySelector<HTMLInputElement>('#shake-detection-toggle')!;
 const autoFocusToggle = document.querySelector<HTMLInputElement>('#auto-focus-toggle')!;
+const eewToggle = document.querySelector<HTMLInputElement>('#eew-toggle')!;
+const eewAutoFocusToggle = document.querySelector<HTMLInputElement>('#eew-auto-focus-toggle')!;
 const store = new EarthquakeStore();
 let hasLoaded = false;
 let disposed = false;
@@ -136,6 +199,15 @@ let settings = readSettings();
 let currentShakeDetection: ShakeDetection | null = null;
 let shakeDetectionTimer: number | undefined;
 let lastFocusedShakeEvent: string | null = null;
+interface StoredEew extends EewMessage {
+  receivedAt: number;
+}
+
+const eewByEventId = new Map<string, StoredEew>();
+let activeEewEventId: string | null = null;
+let activeEew: StoredEew | null = null;
+let eewCancelledMessageVisible = false;
+let eewTimer: number | undefined;
 const lifecycle = new AbortController();
 
 function readSettings(): MonitorSettings {
@@ -144,6 +216,8 @@ function readSettings(): MonitorSettings {
     return {
       shakeDetectionEnabled: stored?.shakeDetectionEnabled !== false,
       autoFocusEnabled: stored?.autoFocusEnabled !== false,
+      eewEnabled: stored?.eewEnabled !== false,
+      eewAutoFocusEnabled: stored?.eewAutoFocusEnabled !== false,
       realtimeIntensityEnabled: false,
     };
   } catch {
@@ -173,23 +247,33 @@ function highConfidenceAreas(detection: ShakeDetection | null): Array<{ area: Ep
   return result;
 }
 
-function focusMapOnAreas(areas: Array<{ area: EpspArea; confidence: number }>): boolean {
-  const points = areas
-    .map(({ area }) => projectCoordinates(area.latitude, area.longitude))
-    .filter((point): point is { x: number; y: number } => point !== null);
+function focusMapOnPoints(points: Array<{ x: number; y: number }>, padding: number, minimumSize: number): boolean {
   if (points.length === 0) return false;
 
   const minX = Math.min(...points.map((point) => point.x));
   const maxX = Math.max(...points.map((point) => point.x));
   const minY = Math.min(...points.map((point) => point.y));
   const maxY = Math.max(...points.map((point) => point.y));
-  const padding = points.length === 1 ? 135 : 80;
-  const width = Math.min(MAP_VIEWBOX.width, Math.max(points.length === 1 ? 220 : 180, maxX - minX + padding * 2));
-  const height = Math.min(MAP_VIEWBOX.height, Math.max(points.length === 1 ? 220 : 180, maxY - minY + padding * 2));
+  const width = Math.min(MAP_VIEWBOX.width, Math.max(minimumSize, maxX - minX + padding * 2));
+  const height = Math.min(MAP_VIEWBOX.height, Math.max(minimumSize, maxY - minY + padding * 2));
   const x = Math.max(MAP_VIEWBOX.x, Math.min(MAP_VIEWBOX.width - width, (minX + maxX - width) / 2));
   const y = Math.max(MAP_VIEWBOX.y, Math.min(MAP_VIEWBOX.height - height, (minY + maxY - height) / 2));
   japanMap.setAttribute('viewBox', `${x.toFixed(2)} ${y.toFixed(2)} ${width.toFixed(2)} ${height.toFixed(2)}`);
   return true;
+}
+
+function focusMapOnAreas(areas: Array<{ area: EpspArea; confidence: number }>): boolean {
+  const points = areas
+    .map(({ area }) => projectCoordinates(area.latitude, area.longitude))
+    .filter((point): point is { x: number; y: number } => point !== null);
+  return focusMapOnPoints(points, points.length === 1 ? 135 : 80, points.length === 1 ? 220 : 180);
+}
+
+function focusMapOnEew(eew: EewMessage): boolean {
+  const hypocenter = eew.earthquake?.hypocenter;
+  if (!hypocenter || hypocenter.latitude === null || hypocenter.longitude === null) return false;
+  const point = projectCoordinates(hypocenter.latitude, hypocenter.longitude);
+  return point ? focusMapOnPoints([point], 145, 260) : false;
 }
 
 function renderShakeDetection(): void {
@@ -260,7 +344,7 @@ function updateShakeDetection(detection: ShakeDetection): void {
 
   currentShakeDetection = detection;
   const areas = highConfidenceAreas(detection);
-  if (settings.autoFocusEnabled && areas.length > 0 && lastFocusedShakeEvent !== detection.startedAt) {
+  if (!activeEew && settings.autoFocusEnabled && areas.length > 0 && lastFocusedShakeEvent !== detection.startedAt) {
     if (focusMapOnAreas(areas)) lastFocusedShakeEvent = detection.startedAt;
   }
   renderShakeDetection();
@@ -270,6 +354,8 @@ function updateShakeDetection(detection: ShakeDetection): void {
 function applySettings(): void {
   shakeDetectionToggle.checked = settings.shakeDetectionEnabled;
   autoFocusToggle.checked = settings.autoFocusEnabled;
+  eewToggle.checked = settings.eewEnabled;
+  eewAutoFocusToggle.checked = settings.eewAutoFocusEnabled;
   if (!settings.shakeDetectionEnabled) clearShakeDetection();
   else if (!settings.autoFocusEnabled) {
     lastFocusedShakeEvent = null;
@@ -281,8 +367,309 @@ function applySettings(): void {
       lastFocusedShakeEvent = currentShakeDetection.startedAt;
     }
   }
+  if (!settings.eewEnabled && (activeEew !== null || eewCancelledMessageVisible || eewByEventId.size > 0)) clearEewState();
+  else if (!settings.eewAutoFocusEnabled) restoreSecondaryFocus();
+  else if (activeEew) focusMapOnEew(activeEew);
   renderShakeDetection();
   saveSettings();
+}
+
+interface EewPrefectureForecast {
+  prefecture: string;
+  scaleTo: number;
+  names: string[];
+}
+
+function forecastPrefectureName(pref: string): string | null {
+  const matches = PREFECTURE_NAMES.filter((name) => pref.startsWith(name));
+  return matches.sort((left, right) => right.length - left.length)[0] ?? null;
+}
+
+function aggregateEewPrefectures(areas: readonly EewArea[]): EewPrefectureForecast[] {
+  const forecasts = new Map<string, EewPrefectureForecast>();
+  for (const area of areas) {
+    if (area.scaleTo === null || !EEW_SCALE_CODES.has(area.scaleTo)) continue;
+    const prefecture = forecastPrefectureName(area.pref);
+    if (!prefecture) continue;
+    const current = forecasts.get(prefecture);
+    if (!current) {
+      forecasts.set(prefecture, { prefecture, scaleTo: area.scaleTo, names: [area.name] });
+    } else {
+      current.scaleTo = Math.max(current.scaleTo, area.scaleTo);
+      if (!current.names.includes(area.name)) current.names.push(area.name);
+    }
+  }
+  return [...forecasts.values()].sort((left, right) => right.scaleTo - left.scaleTo || left.prefecture.localeCompare(right.prefecture, 'ja'));
+}
+
+function eewForecastClass(scale: number): string {
+  if (scale >= 70) return 'eew-scale-7';
+  if (scale >= 60) return 'eew-scale-6';
+  if (scale >= 55) return 'eew-scale-6-weak';
+  if (scale >= 50) return 'eew-scale-5-strong';
+  if (scale >= 45) return 'eew-scale-5-weak';
+  if (scale >= 40) return 'eew-scale-4';
+  if (scale >= 30) return 'eew-scale-3';
+  if (scale >= 20) return 'eew-scale-2';
+  if (scale >= 10) return 'eew-scale-1';
+  return 'eew-scale-0';
+}
+
+function eewForecastColor(scale: number): string {
+  if (scale >= 70) return '#d46a78';
+  if (scale >= 60) return '#dc7b68';
+  if (scale >= 55) return '#e39962';
+  if (scale >= 50) return '#e8ad67';
+  if (scale >= 45) return '#d7bd71';
+  if (scale >= 40) return '#b4bd7b';
+  if (scale >= 30) return '#83b39a';
+  if (scale >= 20) return '#6498ad';
+  if (scale >= 10) return '#4d7f9e';
+  return '#3b607e';
+}
+
+function renderEewPrefectureOverlays(eew: EewMessage | null): void {
+  eewPrefectureOverlays.replaceChildren();
+  if (!eew || !settings.eewEnabled) return;
+
+  for (const forecast of aggregateEewPrefectures(eew.areas)) {
+    const code = PREFECTURE_CODE_BY_NAME.get(forecast.prefecture);
+    if (!code) continue;
+    const overlay = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    const href = `${japanMapUrl}#pref-${code}`;
+    overlay.setAttribute('href', href);
+    overlay.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', href);
+    overlay.setAttribute('x', '0');
+    overlay.setAttribute('y', '0');
+    overlay.setAttribute('width', String(MAP_VIEWBOX.width));
+    overlay.setAttribute('height', String(MAP_VIEWBOX.height));
+    overlay.setAttribute('class', `eew-prefecture ${eewForecastClass(forecast.scaleTo)}`);
+    overlay.setAttribute('fill', eewForecastColor(forecast.scaleTo));
+    overlay.setAttribute('fill-opacity', '.58');
+    overlay.setAttribute('stroke', '#e7d39a');
+    overlay.setAttribute('stroke-opacity', '.72');
+    overlay.setAttribute('stroke-width', '1.3');
+    overlay.setAttribute('vector-effect', 'non-scaling-stroke');
+    overlay.setAttribute('aria-label', `${forecast.prefecture}、最大予測震度${scaleLabel(forecast.scaleTo)}`);
+    eewPrefectureOverlays.append(overlay);
+  }
+}
+
+function renderEewMarker(eew: EewMessage | null): void {
+  eewMarker.replaceChildren();
+  if (!eew) return;
+  updateEewMapStatus(eew);
+  const hypocenter = eew.earthquake?.hypocenter;
+  if (!hypocenter || hypocenter.latitude === null || hypocenter.longitude === null) return;
+  const point = projectCoordinates(hypocenter.latitude, hypocenter.longitude);
+  if (!point) return;
+
+  const marker = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  marker.setAttribute('class', `eew-source-marker${eew.test ? ' is-test' : ''}`);
+  marker.setAttribute('transform', `translate(${point.x} ${point.y})`);
+  marker.setAttribute('role', 'img');
+  marker.setAttribute('aria-label', `${eew.test ? '試験' : '緊急地震速報'}の震源 ${hypocenter.reduceName ?? hypocenter.name ?? '不明'}`);
+
+  const halo = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  halo.setAttribute('class', 'eew-marker-halo');
+  halo.setAttribute('r', '18');
+  marker.append(halo);
+  const diamond = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  diamond.setAttribute('class', 'eew-marker-diamond');
+  diamond.setAttribute('d', 'M 0 -11 L 11 0 L 0 11 L -11 0 Z');
+  marker.append(diamond);
+  const center = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  center.setAttribute('class', 'eew-marker-center');
+  center.setAttribute('r', '2.5');
+  marker.append(center);
+  eewMarker.append(marker);
+}
+
+function updateEewMapStatus(eew: EewMessage): void {
+  const hypocenter = eew.earthquake?.hypocenter;
+  if (!hypocenter) {
+    mapStatus.textContent = `${eew.test ? 'TEST ' : ''}EEW：震源座標なし`;
+    japanMap.setAttribute('aria-label', `${eew.test ? '試験' : '緊急地震速報'}を表示。震源座標なし`);
+    return;
+  }
+  const place = hypocenter.reduceName ?? hypocenter.name ?? '震源情報不明';
+  mapStatus.textContent = `${eew.test ? 'TEST ' : ''}EEW：${place}`;
+  japanMap.setAttribute('aria-label', `${eew.test ? '試験' : '緊急地震速報'}の震源を表示。${place}`);
+}
+
+function eewArrivalText(areas: readonly EewArea[]): string | null {
+  if (areas.some((area) => area.kindCode === '11')) return '主要動 到達済み';
+  const pending = areas.filter((area) => area.kindCode === '10');
+  if (pending.length > 0) {
+    const arrival = pending
+      .map((area) => area.arrivalTime)
+      .filter((value): value is string => value !== null)
+      .sort()[0];
+    return arrival ? `主要動 未到達 / 到達予測 ${formatTime(arrival)}` : '主要動 未到達';
+  }
+  if (areas.some((area) => area.kindCode === '19')) return '到達予想なし（PLUM法）';
+  return null;
+}
+
+function maxEewScale(areas: readonly EewArea[]): number | null {
+  const values = areas
+    .map((area) => area.scaleTo)
+    .filter((value): value is number => value !== null && EEW_SCALE_CODES.has(value));
+  return values.length > 0 ? Math.max(...values) : null;
+}
+
+function renderEewPanel(eew: EewMessage): void {
+  latestCard.classList.add('is-eew');
+  latestHeading.textContent = '緊急地震速報';
+  latestIndicatorLabel.textContent = eew.test ? 'TEST' : 'EEW';
+  latestLoading.hidden = true;
+  latestDetails.hidden = true;
+  eewCancelled.hidden = true;
+  eewDetails.hidden = false;
+  eewTestBadge.hidden = !eew.test;
+  eewReport.textContent = `第${eew.issue.serial}報`;
+
+  const hypocenter = eew.earthquake?.hypocenter;
+  eewPlaceName.textContent = hypocenter?.reduceName ?? hypocenter?.name ?? '震源情報不明';
+  eewOriginTime.textContent = `発生 ${formatTime(eew.earthquake?.originTime ?? eew.time)}`;
+  eewMagnitude.textContent = `M ${hypocenter?.magnitude === null || hypocenter?.magnitude === undefined ? '—' : hypocenter.magnitude.toFixed(1)}`;
+  eewDepth.textContent = hypocenter?.depth === null || hypocenter?.depth === undefined ? '深さ —' : hypocenter.depth === 0 ? 'ごく浅い' : `深さ ${hypocenter.depth} km`;
+  const predictedScale = maxEewScale(eew.areas);
+  eewScale.textContent = predictedScale === null ? '不明' : scaleLabel(predictedScale);
+
+  const arrivalText = eewArrivalText(eew.areas);
+  eewArrivalState.hidden = arrivalText === null;
+  eewArrivalState.textContent = arrivalText ?? '';
+
+  const forecasts = aggregateEewPrefectures(eew.areas);
+  eewForecastAreas.hidden = forecasts.length === 0;
+  eewForecastAreas.textContent = forecasts.length > 0
+    ? `府県集約予測：${forecasts.slice(0, 5).map((forecast) => `${forecast.prefecture} ${scaleLabel(forecast.scaleTo)}`).join('、')}${forecasts.length > 5 ? ' ほか' : ''}`
+    : '';
+}
+
+function renderEewCancelled(): void {
+  latestCard.classList.add('is-eew');
+  latestHeading.textContent = '緊急地震速報';
+  latestIndicatorLabel.textContent = '取消';
+  latestLoading.hidden = true;
+  latestDetails.hidden = true;
+  eewDetails.hidden = true;
+  eewCancelled.hidden = false;
+}
+
+function compareEewSerial(left: string, right: string): number {
+  const leftNumeric = left.match(/^\d+$/)?.[0].replace(/^0+(?=\d)/, '');
+  const rightNumeric = right.match(/^\d+$/)?.[0].replace(/^0+(?=\d)/, '');
+  if (leftNumeric && rightNumeric) {
+    if (leftNumeric.length !== rightNumeric.length) return leftNumeric.length - rightNumeric.length;
+    return leftNumeric.localeCompare(rightNumeric);
+  }
+  return left.localeCompare(right, 'en', { numeric: true, sensitivity: 'base' });
+}
+
+function clearEewTimer(): void {
+  if (eewTimer !== undefined) window.clearTimeout(eewTimer);
+  eewTimer = undefined;
+}
+
+function scheduleEewExpiry(eventId: string, serial: string): void {
+  clearEewTimer();
+  eewTimer = window.setTimeout(() => {
+    eewTimer = undefined;
+    const current = eewByEventId.get(eventId);
+    if (activeEewEventId !== eventId || !current || current.issue.serial !== serial) return;
+    eewByEventId.delete(eventId);
+    activeEewEventId = null;
+    activeEew = null;
+    renderEewPrefectureOverlays(null);
+    renderEewMarker(null);
+    restoreSecondaryFocus();
+    renderLatest(store.recent[0]);
+    renderMarkers(store.recent);
+  }, EEW_TIMEOUT_MS);
+}
+
+function scheduleEewCancellationClear(): void {
+  clearEewTimer();
+  eewTimer = window.setTimeout(() => {
+    eewTimer = undefined;
+    if (!eewCancelledMessageVisible || activeEew) return;
+    eewCancelledMessageVisible = false;
+    renderLatest(store.recent[0]);
+    renderMarkers(store.recent);
+  }, EEW_CANCEL_DISPLAY_MS);
+}
+
+function pruneEewEvents(): void {
+  while (eewByEventId.size > MAX_EEW_EVENTS) {
+    const oldest = [...eewByEventId.values()]
+      .filter((event) => event.issue.eventId !== activeEewEventId)
+      .sort((left, right) => left.receivedAt - right.receivedAt)[0];
+    if (!oldest) return;
+    eewByEventId.delete(oldest.issue.eventId);
+  }
+}
+
+function restoreSecondaryFocus(): void {
+  if (currentShakeDetection && settings.shakeDetectionEnabled && settings.autoFocusEnabled) {
+    const areas = highConfidenceAreas(currentShakeDetection);
+    if (areas.length > 0 && focusMapOnAreas(areas)) {
+      lastFocusedShakeEvent = currentShakeDetection.startedAt;
+      return;
+    }
+  }
+  resetMapView();
+}
+
+function clearEewState(): void {
+  clearEewTimer();
+  eewByEventId.clear();
+  activeEewEventId = null;
+  activeEew = null;
+  eewCancelledMessageVisible = false;
+  renderEewPrefectureOverlays(null);
+  renderEewMarker(null);
+  restoreSecondaryFocus();
+  renderLatest(store.recent[0]);
+  if (hasLoaded) renderMarkers(store.recent);
+}
+
+function updateEew(eew: EewMessage): void {
+  if (!settings.eewEnabled) return;
+  const existing = eewByEventId.get(eew.issue.eventId);
+  const isNewEvent = existing === undefined;
+  if (existing) {
+    const serialOrder = compareEewSerial(eew.issue.serial, existing.issue.serial);
+    if (serialOrder < 0 || (serialOrder === 0 && eew.id === existing.id)) return;
+  }
+
+  const record: StoredEew = { ...eew, receivedAt: Date.now() };
+  eewByEventId.set(eew.issue.eventId, record);
+  pruneEewEvents();
+
+  if (eew.cancelled) {
+    if (activeEewEventId !== eew.issue.eventId) return;
+    activeEewEventId = null;
+    activeEew = null;
+    eewCancelledMessageVisible = true;
+    renderEewPrefectureOverlays(null);
+    renderEewMarker(null);
+    renderEewCancelled();
+    restoreSecondaryFocus();
+    renderMarkers(store.recent);
+    scheduleEewCancellationClear();
+    return;
+  }
+
+  activeEewEventId = eew.issue.eventId;
+  activeEew = record;
+  eewCancelledMessageVisible = false;
+  if (isNewEvent && settings.eewAutoFocusEnabled) focusMapOnEew(eew);
+  renderEewPrefectureOverlays(eew);
+  renderEewMarker(eew);
+  renderEewPanel(eew);
+  scheduleEewExpiry(eew.issue.eventId, eew.issue.serial);
 }
 
 function formatTime(value: string): string {
@@ -293,11 +680,25 @@ function formatTime(value: string): string {
 
 function scaleLabel(scale: number | null): string {
   if (scale === null) return '不明';
-  const labels: Record<number, string> = { 10: '1', 20: '2', 30: '3', 40: '4', 45: '5弱', 50: '5強', 55: '6弱', 60: '6強', 70: '7' };
+  const labels: Record<number, string> = { '-1': '不明', 0: '0', 10: '1', 20: '2', 30: '3', 40: '4', 45: '5弱', 50: '5強', 55: '6弱', 60: '6強', 70: '7', 99: '～程度以上' };
   return labels[scale] ?? '不明';
 }
 
 function renderLatest(latest: Earthquake | undefined): void {
+  if (activeEew) {
+    renderEewPanel(activeEew);
+    return;
+  }
+  if (eewCancelledMessageVisible) {
+    renderEewCancelled();
+    return;
+  }
+
+  latestCard.classList.remove('is-eew');
+  latestHeading.textContent = '最新の地震';
+  latestIndicatorLabel.textContent = '最新';
+  eewDetails.hidden = true;
+  eewCancelled.hidden = true;
   if (!latest) {
     latestDetails.hidden = true;
     latestLoading.hidden = false;
@@ -343,6 +744,9 @@ function intensityClass(scale: number | null): string {
 function renderMarkers(earthquakes: readonly Earthquake[], animateLatest = false): void {
   if (selectedEarthquakeId && !earthquakes.some((quake) => quake.id === selectedEarthquakeId)) selectedEarthquakeId = null;
   const latest = earthquakes[0];
+  const keepEewPriority = (): void => {
+    if (activeEew) updateEewMapStatus(activeEew);
+  };
   const historicalMarkerNodes: SVGGElement[] = [];
   const latestMarkerNodes: SVGGElement[] = [];
   let mappableCount = 0;
@@ -407,6 +811,7 @@ function renderMarkers(earthquakes: readonly Earthquake[], animateLatest = false
   if (!latest) {
     mapStatus.textContent = '表示できる地震情報はありません';
     japanMap.setAttribute('aria-label', '日本地図。表示できる地震情報はありません');
+    keepEewPriority();
     return;
   }
 
@@ -416,11 +821,13 @@ function renderMarkers(earthquakes: readonly Earthquake[], animateLatest = false
     const hasCoordinates = selected.latitude !== null && selected.longitude !== null;
     mapStatus.textContent = hasCoordinates ? '震源は地図の表示範囲外です' : '震源座標を取得できません';
     japanMap.setAttribute('aria-label', '日本地図。震源位置を表示できません');
+    keepEewPriority();
     return;
   }
   const prefix = selected.id === latest.id ? '最新' : '選択中';
   mapStatus.textContent = `${prefix}：${selected.hypocenter} / 地図上 ${mappableCount}件`;
   japanMap.setAttribute('aria-label', `日本地図。最近の震源${mappableCount}件を表示。${selected.hypocenter}を強調中`);
+  keepEewPriority();
 }
 
 function renderAll(animateLatest = false): void {
@@ -456,6 +863,16 @@ shakeDetectionToggle.addEventListener('change', () => {
 
 autoFocusToggle.addEventListener('change', () => {
   settings = { ...settings, autoFocusEnabled: autoFocusToggle.checked };
+  applySettings();
+}, { signal: lifecycle.signal });
+
+eewToggle.addEventListener('change', () => {
+  settings = { ...settings, eewEnabled: eewToggle.checked };
+  applySettings();
+}, { signal: lifecycle.signal });
+
+eewAutoFocusToggle.addEventListener('change', () => {
+  settings = { ...settings, eewAutoFocusEnabled: eewAutoFocusToggle.checked };
   applySettings();
 }, { signal: lifecycle.signal });
 
@@ -540,7 +957,7 @@ function connectWebSocket(): void {
   setConnectionState(connectionEstablished ? 'reconnecting' : 'offline');
   let connection: WebSocket;
   try {
-    connection = new WebSocket('wss://api.p2pquake.net/v2/ws');
+    connection = new WebSocket(websocketUrl);
   } catch {
     scheduleReconnect();
     return;
@@ -564,6 +981,15 @@ function connectWebSocket(): void {
     } catch {
       return;
     }
+
+    const parsedEew = parseEew(payload);
+    if (parsedEew) {
+      updateEew(parsedEew);
+      return;
+    }
+
+    // 554 only signals that an EEW publication was detected. It is not an EEW payload.
+    if (parseEewDetection(payload)) return;
 
     const parsedShakeDetection = parseShakeDetection(payload);
     if (parsedShakeDetection) {
@@ -604,6 +1030,10 @@ window.addEventListener('pagehide', () => {
   reconnectTimer = undefined;
   if (shakeDetectionTimer !== undefined) window.clearTimeout(shakeDetectionTimer);
   shakeDetectionTimer = undefined;
+  clearEewTimer();
+  eewByEventId.clear();
+  activeEew = null;
+  activeEewEventId = null;
   if (socket) {
     const oldSocket = socket;
     socket = null;

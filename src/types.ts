@@ -17,6 +17,49 @@ export interface P2PUserquake {
   area?: number;
 }
 
+export interface P2PEEWArea {
+  pref?: string;
+  name?: string;
+  scaleFrom?: number;
+  scaleTo?: number;
+  kindCode?: string;
+  arrivalTime?: string | null;
+}
+
+export interface P2PEEW {
+  id?: string;
+  code: number;
+  time?: string;
+  test?: boolean;
+  cancelled?: boolean;
+  issue?: {
+    time?: string;
+    eventId?: string;
+    serial?: string | number;
+  };
+  earthquake?: {
+    originTime?: string;
+    arrivalTime?: string;
+    condition?: string;
+    hypocenter?: {
+      name?: string;
+      reduceName?: string;
+      latitude?: number;
+      longitude?: number;
+      depth?: number;
+      magnitude?: number;
+    };
+  };
+  areas?: P2PEEWArea[];
+}
+
+export interface P2PEEWDetection {
+  id?: string;
+  code: number;
+  time?: string;
+  type?: string;
+}
+
 export interface P2PAreaConfidence {
   confidence?: number;
   count?: number;
@@ -53,6 +96,49 @@ export interface ShakeDetection {
   startedAt: string;
   updatedAt: string;
   areaConfidences: ReadonlyMap<string, number>;
+}
+
+export interface EewArea {
+  pref: string;
+  name: string;
+  scaleFrom: number | null;
+  scaleTo: number | null;
+  kindCode: string | null;
+  arrivalTime: string | null;
+}
+
+export interface EewMessage {
+  id: string;
+  code: 556;
+  time: string;
+  test: boolean;
+  cancelled: boolean;
+  issue: {
+    time: string;
+    eventId: string;
+    serial: string;
+  };
+  earthquake?: {
+    originTime: string | null;
+    arrivalTime: string | null;
+    condition: string | null;
+    hypocenter: {
+      name: string | null;
+      reduceName: string | null;
+      latitude: number | null;
+      longitude: number | null;
+      depth: number | null;
+      magnitude: number | null;
+    };
+  };
+  areas: EewArea[];
+}
+
+export interface EewDetection {
+  id: string;
+  code: 554;
+  time: string;
+  type: string | null;
 }
 
 export interface EpspArea {
