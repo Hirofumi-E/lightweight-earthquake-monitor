@@ -126,7 +126,7 @@ button { color: inherit; font: inherit; }
 .map-legend .legend-eew { background: #f3c36e; box-shadow: 0 0 0 3px #f3c36e33; }
 .map-legend .legend-detection { background: #e2aa61; box-shadow: 0 0 0 3px #e2aa6133; }
 .map-legend .legend-past { background: #82b5d7; opacity: .75; }
-.map-controls { position: fixed; z-index: 5; top: 74px; left: 50%; display: flex; gap: 4px; transform: translateX(-50%); pointer-events: auto; }
+.map-controls { position: fixed; z-index: 5; top: 102px; left: 50%; display: flex; gap: 4px; transform: translateX(-50%); pointer-events: auto; }
 .map-controls button { min-width: 29px; height: 27px; padding: 0 7px; border: 1px solid #3c596b; border-radius: 3px; background: #12212dcc; color: #d3e1ea; font-size: 14px; line-height: 1; cursor: pointer; }
 .map-controls button:hover, .map-controls button:focus-visible { border-color: #82abc3; background: #1b3444ee; color: #f1f7fb; outline: none; }
 .map-controls button:last-child { font-size: 10px; }
