@@ -16,40 +16,51 @@ app.innerHTML = `
         <span class="brand-mark" aria-hidden="true">＋</span>
         <span><strong>Lightweight Earthquake Monitor</strong><small>JAPAN SEISMIC ACTIVITY</small></span>
       </a>
-      <div id="connection-status" class="live is-offline" role="status" aria-live="polite"><span class="live-dot"></span><span id="connection-label">OFFLINE</span></div>
+      <div class="topbar-right"><span class="monitor-label">EARTHQUAKE MONITOR / JP</span><div id="connection-status" class="live is-offline" role="status" aria-live="polite"><span class="live-dot"></span><span id="connection-label">OFFLINE</span></div></div>
     </header>
-    <main>
-      <section class="latest-section" aria-labelledby="latest-heading">
-        <div class="section-heading"><div><p class="eyebrow">LATEST UPDATE</p><h1 id="latest-heading">最新の地震</h1></div><span id="updated-at" class="updated-at">取得準備中</span></div>
-        <div class="latest-dashboard">
-          <section class="map-card" aria-labelledby="map-heading">
-            <div class="map-card-heading"><div><p class="eyebrow">EPICENTER MAP</p><h2 id="map-heading">日本周辺</h2></div><span class="map-key"><i></i>最新の震源</span></div>
-            <svg id="japan-map" class="japan-map" viewBox="0 0 440 500" role="img" aria-label="日本列島と最新の震源位置">
+    <div class="workspace">
+      <nav class="side-nav" aria-label="メインナビゲーション">
+        <button class="nav-item is-active" type="button" data-view="realtime" aria-current="page"><span class="nav-icon nav-icon-live" aria-hidden="true">◉</span><span>リアル<br>タイム</span></button>
+        <button class="nav-item" type="button" data-view="earthquakes"><span class="nav-icon" aria-hidden="true">≋</span><span>地震情報</span></button>
+        <button class="nav-item is-disabled" type="button" disabled aria-disabled="true"><span class="nav-icon" aria-hidden="true">≈</span><span>津波情報<small>準備中</small></span></button>
+        <div class="nav-footer"><span class="nav-region">JP</span><span>v0.1</span></div>
+      </nav>
+      <main class="main-panel">
+        <section id="realtime-view" class="view-panel map-view" aria-labelledby="realtime-heading">
+          <div class="view-heading"><div><p class="eyebrow">REALTIME / JAPAN</p><h1 id="realtime-heading">リアルタイム地震情報</h1></div><div class="map-heading-meta"><span class="map-key"><i class="key-latest"></i>最新</span><span class="map-key"><i class="key-history"></i>過去の地震</span></div></div>
+          <div class="map-stage">
+            <div class="map-coordinate coordinate-north" aria-hidden="true">46°N</div>
+            <div class="map-coordinate coordinate-east" aria-hidden="true">146°E</div>
+            <svg id="japan-map" class="japan-map" viewBox="0 0 440 500" role="img" aria-label="日本列島と最近の震源位置">
               <image href="${japanMapUrl}" width="440" height="500" />
-              <g id="epicenter-marker" class="epicenter-marker" visibility="hidden" aria-hidden="true">
-                <circle class="marker-halo" r="12" />
-                <circle class="marker-core" r="5" />
-                <path class="marker-star" d="M0-3.2 1-1 3.2 0 1 1 0 3.2-1 1-3.2 0-1-1Z" />
-              </g>
+              <g id="earthquake-markers" class="earthquake-markers" aria-label="最近の震源" />
             </svg>
-            <p id="map-status" class="map-status">地震情報を取得しています</p>
-          </section>
-          <section id="latest-card" class="latest-card" aria-label="最新の地震情報" aria-live="polite">
-            <div id="latest-loading" class="loading"><span class="spinner"></span>地震情報を取得しています</div>
-            <article id="latest-details" class="latest-details" hidden>
-              <div class="latest-main"><span class="latest-label">最大震度</span><strong id="latest-scale" class="scale">—</strong><span class="intensity-unit">震度</span></div>
-              <div class="latest-place"><span class="latest-label">震源地</span><strong id="latest-place-name">—</strong><span id="latest-date" class="latest-date">—</span></div>
-              <div class="latest-stats"><div><span>MAGNITUDE</span><strong id="latest-magnitude">—</strong></div><div><span>DEPTH</span><strong id="latest-depth">—</strong></div></div>
-            </article>
-          </section>
-        </div>
-      </section>
-      <section class="recent-section" aria-labelledby="recent-heading">
-        <div class="section-heading"><div><p class="eyebrow">RECENT ACTIVITY</p><h2 id="recent-heading">最近の地震</h2></div><span id="event-count" class="event-count">—</span></div>
-        <div id="earthquake-list" class="earthquake-list"><div class="list-loading">情報を読み込んでいます</div></div>
-      </section>
-    </main>
-    <footer><span>Source: P2P地震情報 JSON API v2</span><span>HTTP履歴取得 + WebSocket LIVE</span></footer>
+            <div id="map-status" class="map-status">地震情報を取得しています</div>
+            <div class="map-scale" aria-hidden="true"><span></span><span></span><span></span></div>
+          </div>
+        </section>
+        <section id="earthquakes-view" class="view-panel history-view" aria-labelledby="history-heading" hidden>
+          <div class="history-heading"><div><p class="eyebrow">RECENT ACTIVITY / JP</p><h1 id="history-heading">地震情報</h1><p class="history-description">最新の情報から最大10件を表示します</p></div><span id="event-count" class="event-count">—</span></div>
+          <div class="history-columns" aria-hidden="true"><span>発生時刻</span><span>震源地</span><span>最大震度</span><span>規模 / 深さ</span></div>
+          <div id="earthquake-list" class="earthquake-list"><div class="list-loading">情報を読み込んでいます</div></div>
+        </section>
+      </main>
+    </div>
+    <footer id="latest-card" class="latest-strip" aria-label="最新の地震情報" aria-live="polite">
+      <div class="strip-title"><span class="strip-live-dot" aria-hidden="true"></span><div><strong>最新の地震</strong><small>NEWEST EVENT</small></div></div>
+      <div class="strip-content">
+        <div id="latest-loading" class="loading"><span class="spinner"></span>情報を取得しています</div>
+        <article id="latest-details" class="latest-details" hidden>
+          <div class="strip-intensity"><span>最大震度</span><strong id="latest-scale" class="scale">—</strong></div>
+          <strong id="latest-place-name" class="strip-place">—</strong>
+          <time id="latest-date" class="strip-time">—</time>
+          <span id="latest-magnitude" class="strip-measure">M —</span>
+          <span class="strip-divider" aria-hidden="true"></span>
+          <span id="latest-depth" class="strip-measure">深さ —</span>
+        </article>
+      </div>
+      <div class="strip-updated"><span>DATA STATUS</span><span id="updated-at" class="updated-at">取得準備中</span></div>
+    </footer>
   </div>`;
 
 const latestCard = document.querySelector<HTMLDivElement>('#latest-card')!;
@@ -64,10 +75,13 @@ const latestDate = document.querySelector<HTMLElement>('#latest-date')!;
 const latestMagnitude = document.querySelector<HTMLElement>('#latest-magnitude')!;
 const latestDepth = document.querySelector<HTMLElement>('#latest-depth')!;
 const japanMap = document.querySelector<SVGSVGElement>('#japan-map')!;
-const epicenterMarker = document.querySelector<SVGGElement>('#epicenter-marker')!;
+const earthquakeMarkers = document.querySelector<SVGGElement>('#earthquake-markers')!;
 const mapStatus = document.querySelector<HTMLParagraphElement>('#map-status')!;
 const connectionStatus = document.querySelector<HTMLDivElement>('#connection-status')!;
 const connectionLabel = document.querySelector<HTMLSpanElement>('#connection-label')!;
+const realtimeView = document.querySelector<HTMLElement>('#realtime-view')!;
+const earthquakesView = document.querySelector<HTMLElement>('#earthquakes-view')!;
+const navigationButtons = [...document.querySelectorAll<HTMLButtonElement>('.nav-item[data-view]')];
 const store = new EarthquakeStore();
 let hasLoaded = false;
 let disposed = false;
@@ -78,6 +92,7 @@ let socket: WebSocket | null = null;
 let reconnectTimer: number | undefined;
 let reconnectAttempt = 0;
 let connectionEstablished = false;
+let selectedEarthquakeId: string | null = null;
 const lifecycle = new AbortController();
 
 function formatTime(value: string): string {
@@ -97,7 +112,6 @@ function renderLatest(latest: Earthquake | undefined): void {
     latestDetails.hidden = true;
     latestLoading.hidden = false;
     latestLoading.innerHTML = '<div class="empty-state">表示できる地震情報はありません</div>';
-    epicenterMarker.setAttribute('visibility', 'hidden');
     mapStatus.textContent = '表示できる地震情報はありません';
     return;
   }
@@ -108,20 +122,7 @@ function renderLatest(latest: Earthquake | undefined): void {
   latestPlace.textContent = latest.hypocenter;
   latestDate.textContent = formatTime(latest.time);
   latestMagnitude.textContent = `M ${latest.magnitude?.toFixed(1) ?? '—'}`;
-  latestDepth.textContent = latest.depth === null ? '—' : latest.depth === 0 ? 'ごく浅い' : `${latest.depth} km`;
-
-  const mapPoint = projectEpicenter(latest);
-  if (mapPoint) {
-    epicenterMarker.setAttribute('transform', `translate(${mapPoint.x} ${mapPoint.y})`);
-    epicenterMarker.setAttribute('visibility', 'visible');
-    mapStatus.textContent = `${latest.hypocenter} の震源位置`;
-    japanMap.setAttribute('aria-label', `日本地図。${latest.hypocenter}の震源位置を表示`);
-  } else {
-    epicenterMarker.setAttribute('visibility', 'hidden');
-    const hasCoordinates = latest.latitude !== null && latest.longitude !== null;
-    mapStatus.textContent = hasCoordinates ? '震源は地図の表示範囲外です' : '震源座標を取得できません';
-    japanMap.setAttribute('aria-label', '日本地図。最新の震源位置は表示していません');
-  }
+  latestDepth.textContent = latest.depth === null ? '深さ —' : latest.depth === 0 ? 'ごく浅い' : `深さ ${latest.depth} km`;
 
 }
 
@@ -133,18 +134,105 @@ function renderList(earthquakes: readonly Earthquake[]): void {
   }
 
   list.innerHTML = earthquakes.map((quake, index) => `
-    <article class="quake-row ${index === 0 ? 'is-latest' : ''}">
+    <button class="quake-row ${index === 0 ? 'is-latest' : ''} ${selectedEarthquakeId === quake.id ? 'is-selected' : ''}" type="button" data-earthquake-id="${escapeHtml(quake.id)}" aria-pressed="${selectedEarthquakeId === quake.id}">
       <time datetime="${escapeHtml(quake.time)}">${formatTime(quake.time)}</time>
       <strong class="quake-place">${escapeHtml(quake.hypocenter)}</strong>
       <span class="row-scale">震度 <b>${scaleLabel(quake.maxScale)}</b></span>
-      <span class="row-magnitude">M ${quake.magnitude?.toFixed(1) ?? '—'}</span>
-      <span class="row-depth">${quake.depth === null ? '—' : quake.depth === 0 ? 'ごく浅い' : `${quake.depth} km`}</span>
-    </article>`).join('');
+      <span class="row-measure">M ${quake.magnitude?.toFixed(1) ?? '—'}<small>${quake.depth === null ? '深さ —' : quake.depth === 0 ? 'ごく浅い' : `深さ ${quake.depth} km`}</small></span>
+    </button>`).join('');
   eventCount.textContent = `${earthquakes.length}件`;
 }
 
-function renderAll(): void {
+function intensityClass(scale: number | null): string {
+  if (scale !== null && scale >= 55) return 'intensity-severe';
+  if (scale !== null && scale >= 40) return 'intensity-strong';
+  if (scale !== null && scale >= 30) return 'intensity-moderate';
+  return 'intensity-light';
+}
+
+function renderMarkers(earthquakes: readonly Earthquake[], animateLatest = false): void {
+  if (selectedEarthquakeId && !earthquakes.some((quake) => quake.id === selectedEarthquakeId)) selectedEarthquakeId = null;
+  const latest = earthquakes[0];
+  const markerNodes: SVGGElement[] = [];
+  let mappableCount = 0;
+  const drawable = [...earthquakes].reverse();
+
+  for (let index = 0; index < drawable.length; index += 1) {
+    const quake = drawable[index];
+    const point = projectEpicenter(quake);
+    if (!point) continue;
+    mappableCount += 1;
+    const isLatest = quake.id === latest?.id;
+    const isSelected = quake.id === (selectedEarthquakeId ?? latest?.id);
+    const marker = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    const originalIndex = earthquakes.findIndex((item) => item.id === quake.id);
+    const classes = ['epicenter-marker', intensityClass(quake.maxScale)];
+    if (isLatest) classes.push('is-latest');
+    if (isSelected) classes.push('is-selected');
+    if (animateLatest && isLatest) classes.push('is-new');
+    marker.setAttribute('class', classes.join(' '));
+    marker.setAttribute('transform', `translate(${point.x} ${point.y})`);
+    marker.setAttribute('role', 'img');
+    marker.setAttribute('aria-label', `${quake.hypocenter}、震度${scaleLabel(quake.maxScale)}${isLatest ? '、最新' : ''}`);
+    marker.style.opacity = isLatest || isSelected ? '1' : String(Math.max(0.3, 0.82 - originalIndex * 0.055));
+
+    const radius = (isLatest ? 5 : 3.2) + Math.min(7, (quake.maxScale ?? 10) / 10) * 0.35;
+    const halo = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    halo.setAttribute('class', 'marker-halo');
+    halo.setAttribute('r', String(radius + (isLatest || isSelected ? 6 : 2)));
+    marker.append(halo);
+
+    if (isLatest || isSelected) {
+      const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      ring.setAttribute('class', 'marker-ring');
+      ring.setAttribute('r', String(radius + 3));
+      marker.append(ring);
+    }
+
+    const core = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    core.setAttribute('class', 'marker-core');
+    core.setAttribute('r', String(radius));
+    marker.append(core);
+
+    if (isLatest || isSelected) {
+      const center = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      center.setAttribute('class', 'marker-center');
+      center.setAttribute('r', '1.7');
+      marker.append(center);
+    }
+
+    if (animateLatest && isLatest) {
+      const pulse = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      pulse.setAttribute('class', 'marker-pulse');
+      pulse.setAttribute('r', String(radius + 7));
+      marker.prepend(pulse);
+    }
+    markerNodes.push(marker);
+  }
+
+  earthquakeMarkers.replaceChildren(...markerNodes);
+  if (!latest) {
+    mapStatus.textContent = '表示できる地震情報はありません';
+    japanMap.setAttribute('aria-label', '日本地図。表示できる地震情報はありません');
+    return;
+  }
+
+  const selected = earthquakes.find((quake) => quake.id === selectedEarthquakeId) ?? latest;
+  const selectedPoint = projectEpicenter(selected);
+  if (!selectedPoint) {
+    const hasCoordinates = selected.latitude !== null && selected.longitude !== null;
+    mapStatus.textContent = hasCoordinates ? '震源は地図の表示範囲外です' : '震源座標を取得できません';
+    japanMap.setAttribute('aria-label', '日本地図。震源位置を表示できません');
+    return;
+  }
+  const prefix = selected.id === latest.id ? '最新' : '選択中';
+  mapStatus.textContent = `${prefix}：${selected.hypocenter} / 地図上 ${mappableCount}件`;
+  japanMap.setAttribute('aria-label', `日本地図。最近の震源${mappableCount}件を表示。${selected.hypocenter}を強調中`);
+}
+
+function renderAll(animateLatest = false): void {
   renderLatest(store.recent[0]);
+  renderMarkers(store.recent, animateLatest);
   renderList(store.recent);
   hasLoaded = true;
   document.querySelector('#refresh-error')?.remove();
@@ -159,6 +247,37 @@ function setConnectionState(state: 'live' | 'reconnecting' | 'offline'): void {
 function updateTimestamp(prefix = '最終更新'): void {
   updatedAt.textContent = `${prefix} ${new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
 }
+
+function setActiveView(view: 'realtime' | 'earthquakes'): void {
+  const showRealtime = view === 'realtime';
+  realtimeView.hidden = !showRealtime;
+  earthquakesView.hidden = showRealtime;
+  for (const button of navigationButtons) {
+    const active = button.dataset.view === view;
+    button.classList.toggle('is-active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+}
+
+for (const button of navigationButtons) {
+  button.addEventListener('click', () => {
+    const view = button.dataset.view;
+    if (view === 'realtime' || view === 'earthquakes') setActiveView(view);
+  }, { signal: lifecycle.signal });
+}
+
+list.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  const row = target.closest<HTMLButtonElement>('[data-earthquake-id]');
+  const id = row?.dataset.earthquakeId;
+  if (!id || !store.recent.some((quake) => quake.id === id)) return;
+  selectedEarthquakeId = id;
+  renderMarkers(store.recent);
+  renderList(store.recent);
+  setActiveView('realtime');
+}, { signal: lifecycle.signal });
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
@@ -191,7 +310,7 @@ async function loadHistory(reason: 'startup' | 'retry' | 'reconnect'): Promise<v
         const message = error instanceof Error ? error.message : '通信に失敗しました';
         if (!hasLoaded) {
           latestLoading.hidden = false;
-          latestLoading.innerHTML = `<div class="error-state"><strong>情報を取得できませんでした</strong><span>${escapeHtml(message)}</span><button id="retry-button" type="button">再試行</button></div>`;
+          latestLoading.innerHTML = `<div class="error-state"><strong>情報を取得できませんでした</strong><span>${escapeHtml(message)}</span><button id="retry-button" class="retry-button" type="button">再試行</button></div>`;
           mapStatus.textContent = '地震情報を取得できませんでした';
           list.innerHTML = '<div class="empty-state">通信が回復すると地震情報を表示します</div>';
           document.querySelector<HTMLButtonElement>('#retry-button')?.addEventListener('click', () => void loadHistory('retry'), { once: true, signal: lifecycle.signal });
@@ -256,7 +375,7 @@ function connectWebSocket(): void {
     }
     const earthquake = parseEarthquake(payload);
     if (!earthquake || !store.merge([earthquake])) return;
-    renderAll();
+    renderAll(true);
     updateTimestamp('最終受信');
   };
 
