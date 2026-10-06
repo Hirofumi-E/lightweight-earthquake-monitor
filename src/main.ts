@@ -1,10 +1,33 @@
 import './style.css';
-import { fetchRecentEarthquakes, parseEarthquake } from './api';
+import { fetchRecentEarthquakes, parseEarthquake, parseShakeDetection, parseUserquake } from './api';
 import { EarthquakeStore } from './earthquakeStore';
-import { projectEpicenter } from './mapProjection';
-import type { Earthquake } from './types';
+import { MAP_VIEWBOX, projectCoordinates, projectEpicenter } from './mapProjection';
+import areasData from './epspAreas.json';
+import type { Earthquake, EpspArea, ShakeDetection } from './types';
 
 const japanMapUrl = new URL('./assets/japan-map.svg', import.meta.url).href;
+const epspAreas = areasData as EpspArea[];
+const areaByCode = new Map<string, EpspArea>();
+for (const area of epspAreas) {
+  areaByCode.set(area.code, area);
+  const numericCode = String(Number(area.code));
+  if (numericCode !== area.code) areaByCode.set(numericCode, area);
+}
+const SETTINGS_STORAGE_KEY = 'lightweight-earthquake-monitor.settings';
+const DETECTION_TIMEOUT_MS = 30_000;
+const HIGH_CONFIDENCE_THRESHOLD = 0.8;
+
+interface MonitorSettings {
+  shakeDetectionEnabled: boolean;
+  autoFocusEnabled: boolean;
+  realtimeIntensityEnabled: false;
+}
+
+const DEFAULT_SETTINGS: MonitorSettings = {
+  shakeDetectionEnabled: true,
+  autoFocusEnabled: true,
+  realtimeIntensityEnabled: false,
+};
 
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('アプリの表示領域が見つかりません');
@@ -13,7 +36,31 @@ app.innerHTML = `
   <div class="shell">
     <header class="topbar">
       <h1 class="brand">Lightweight Earthquake Monitor</h1>
-      <div id="connection-status" class="live is-offline" role="status" aria-live="polite"><span class="live-dot"></span><span id="connection-label">OFFLINE</span></div>
+      <div class="header-actions">
+        <div id="shake-status" class="shake-status" role="status" aria-live="polite" hidden>
+          <span class="shake-status-label">揺れを検出しています</span>
+          <span id="shake-status-detail" class="shake-status-detail"></span>
+          <small>P2P感知解析結果</small>
+        </div>
+        <button id="settings-toggle" class="settings-toggle" type="button" aria-expanded="false" aria-controls="settings-panel" title="動作設定">⚙ 設定</button>
+        <div id="connection-status" class="live is-offline" role="status" aria-live="polite"><span class="live-dot"></span><span id="connection-label">OFFLINE</span></div>
+      </div>
+      <section id="settings-panel" class="settings-panel" aria-label="動作設定" hidden>
+      <div class="settings-heading"><h2>動作設定</h2><span>保存済み</span></div>
+      <label class="settings-row">
+        <span><strong>揺れ検出機能</strong><small>9611解析結果を表示</small></span>
+        <input id="shake-detection-toggle" class="settings-checkbox" type="checkbox" checked />
+      </label>
+      <label class="settings-row">
+        <span><strong>揺れ検出時に対象地域へ自動フォーカス</strong><small>信頼度Aの地域へ一時移動</small></span>
+        <input id="auto-focus-toggle" class="settings-checkbox" type="checkbox" checked />
+      </label>
+      <div class="settings-row is-disabled">
+        <span><strong>リアルタイム震度</strong><small>データソース準備中</small></span>
+        <input class="settings-checkbox" type="checkbox" disabled aria-label="リアルタイム震度（データソース準備中）" />
+      </div>
+      <p class="settings-note">揺れ検出はP2P地震情報ユーザーの感知情報を解析した状態です。震度観測や地震発生の確定を示すものではありません。</p>
+      </section>
     </header>
     <main class="workspace">
       <aside class="information-panel" aria-label="最新地震情報と地震履歴">
@@ -35,10 +82,14 @@ app.innerHTML = `
         </section>
       </aside>
       <section class="map-panel" aria-label="日本地図と震源">
-        <div class="map-legend" aria-label="地図の凡例"><span><i class="legend-current"></i>最新の震源</span><span><i class="legend-past"></i>過去の震源</span></div>
+        <div class="map-legend" aria-label="地図の凡例"><span><i class="legend-current"></i>最新の震源</span><span><i class="legend-detection"></i>揺れ検出地域</span><span><i class="legend-past"></i>過去の震源</span></div>
         <svg id="japan-map" class="japan-map" viewBox="0 0 800 800" role="img" aria-label="日本の都道府県地図と最近の震源位置">
           <image href="${japanMapUrl}" width="800" height="800" />
-          <g id="earthquake-markers" class="earthquake-markers" aria-label="最近の震源" />
+          <g id="earthquake-markers" class="earthquake-markers" aria-label="最近の震源">
+            <g id="historical-earthquake-markers" aria-label="過去の震源" />
+            <g id="shake-detection-markers" class="shake-detection-markers" aria-label="揺れ検出地域" />
+            <g id="latest-earthquake-marker" aria-label="最新の震源" />
+          </g>
         </svg>
         <p class="map-attribution">地図：気象庁「地震情報／都道府県等」のデータを加工して作成</p>
         <p id="map-status" class="map-status">地震情報を取得しています</p>
@@ -58,10 +109,18 @@ const latestDate = document.querySelector<HTMLElement>('#latest-date')!;
 const latestMagnitude = document.querySelector<HTMLElement>('#latest-magnitude')!;
 const latestDepth = document.querySelector<HTMLElement>('#latest-depth')!;
 const japanMap = document.querySelector<SVGSVGElement>('#japan-map')!;
-const earthquakeMarkers = document.querySelector<SVGGElement>('#earthquake-markers')!;
+const shakeDetectionMarkers = document.querySelector<SVGGElement>('#shake-detection-markers')!;
+const historicalEarthquakeMarkers = document.querySelector<SVGGElement>('#historical-earthquake-markers')!;
+const latestEarthquakeMarker = document.querySelector<SVGGElement>('#latest-earthquake-marker')!;
 const mapStatus = document.querySelector<HTMLParagraphElement>('#map-status')!;
 const connectionStatus = document.querySelector<HTMLDivElement>('#connection-status')!;
 const connectionLabel = document.querySelector<HTMLSpanElement>('#connection-label')!;
+const shakeStatus = document.querySelector<HTMLDivElement>('#shake-status')!;
+const shakeStatusDetail = document.querySelector<HTMLSpanElement>('#shake-status-detail')!;
+const settingsToggle = document.querySelector<HTMLButtonElement>('#settings-toggle')!;
+const settingsPanel = document.querySelector<HTMLElement>('#settings-panel')!;
+const shakeDetectionToggle = document.querySelector<HTMLInputElement>('#shake-detection-toggle')!;
+const autoFocusToggle = document.querySelector<HTMLInputElement>('#auto-focus-toggle')!;
 const store = new EarthquakeStore();
 let hasLoaded = false;
 let disposed = false;
@@ -73,7 +132,158 @@ let reconnectTimer: number | undefined;
 let reconnectAttempt = 0;
 let connectionEstablished = false;
 let selectedEarthquakeId: string | null = null;
+let settings = readSettings();
+let currentShakeDetection: ShakeDetection | null = null;
+let shakeDetectionTimer: number | undefined;
+let lastFocusedShakeEvent: string | null = null;
 const lifecycle = new AbortController();
+
+function readSettings(): MonitorSettings {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(SETTINGS_STORAGE_KEY) ?? 'null') as Partial<MonitorSettings> | null;
+    return {
+      shakeDetectionEnabled: stored?.shakeDetectionEnabled !== false,
+      autoFocusEnabled: stored?.autoFocusEnabled !== false,
+      realtimeIntensityEnabled: false,
+    };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+function saveSettings(): void {
+  try {
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // 設定を保存できない環境でも、現在のページ内では機能を継続します。
+  }
+}
+
+function resetMapView(): void {
+  japanMap.setAttribute('viewBox', `${MAP_VIEWBOX.x} ${MAP_VIEWBOX.y} ${MAP_VIEWBOX.width} ${MAP_VIEWBOX.height}`);
+}
+
+function highConfidenceAreas(detection: ShakeDetection | null): Array<{ area: EpspArea; confidence: number }> {
+  if (!detection) return [];
+  const result: Array<{ area: EpspArea; confidence: number }> = [];
+  for (const [code, confidence] of detection.areaConfidences) {
+    const area = areaByCode.get(code);
+    if (area && confidence >= HIGH_CONFIDENCE_THRESHOLD) result.push({ area, confidence });
+  }
+  return result;
+}
+
+function focusMapOnAreas(areas: Array<{ area: EpspArea; confidence: number }>): boolean {
+  const points = areas
+    .map(({ area }) => projectCoordinates(area.latitude, area.longitude))
+    .filter((point): point is { x: number; y: number } => point !== null);
+  if (points.length === 0) return false;
+
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const padding = points.length === 1 ? 135 : 80;
+  const width = Math.min(MAP_VIEWBOX.width, Math.max(points.length === 1 ? 220 : 180, maxX - minX + padding * 2));
+  const height = Math.min(MAP_VIEWBOX.height, Math.max(points.length === 1 ? 220 : 180, maxY - minY + padding * 2));
+  const x = Math.max(MAP_VIEWBOX.x, Math.min(MAP_VIEWBOX.width - width, (minX + maxX - width) / 2));
+  const y = Math.max(MAP_VIEWBOX.y, Math.min(MAP_VIEWBOX.height - height, (minY + maxY - height) / 2));
+  japanMap.setAttribute('viewBox', `${x.toFixed(2)} ${y.toFixed(2)} ${width.toFixed(2)} ${height.toFixed(2)}`);
+  return true;
+}
+
+function renderShakeDetection(): void {
+  shakeDetectionMarkers.replaceChildren();
+  if (!settings.shakeDetectionEnabled || !currentShakeDetection) {
+    shakeStatus.hidden = true;
+    shakeStatusDetail.textContent = '';
+    return;
+  }
+
+  const areas = highConfidenceAreas(currentShakeDetection);
+  for (const { area, confidence } of areas) {
+    const point = projectCoordinates(area.latitude, area.longitude);
+    if (!point) continue;
+    const marker = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    marker.setAttribute('class', 'shake-area-marker');
+    marker.setAttribute('transform', `translate(${point.x} ${point.y})`);
+    marker.setAttribute('role', 'img');
+    marker.setAttribute('aria-label', `${area.name}、信頼度A（${Math.round(confidence * 100)}%）`);
+
+    const halo = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    halo.setAttribute('class', 'shake-area-halo');
+    halo.setAttribute('r', '13');
+    marker.append(halo);
+    const core = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    core.setAttribute('class', 'shake-area-core');
+    core.setAttribute('r', '5');
+    marker.append(core);
+    shakeDetectionMarkers.append(marker);
+  }
+
+  shakeStatus.hidden = false;
+  shakeStatusDetail.textContent = areas.length > 0
+    ? `${areaSummary(areas)} ${areas.length}地域`
+    : '信頼度Aの地域なし';
+}
+
+function areaSummary(areas: Array<{ area: EpspArea; confidence: number }>): string {
+  const regions = [...new Set(areas.map(({ area }) => area.region))];
+  return regions.slice(0, 2).join('・') + (regions.length > 2 ? 'ほか' : '');
+}
+
+function clearShakeDetection(): void {
+  if (shakeDetectionTimer !== undefined) window.clearTimeout(shakeDetectionTimer);
+  shakeDetectionTimer = undefined;
+  currentShakeDetection = null;
+  lastFocusedShakeEvent = null;
+  resetMapView();
+  renderShakeDetection();
+}
+
+function scheduleShakeDetectionExpiry(): void {
+  if (shakeDetectionTimer !== undefined) window.clearTimeout(shakeDetectionTimer);
+  shakeDetectionTimer = window.setTimeout(() => {
+    shakeDetectionTimer = undefined;
+    currentShakeDetection = null;
+    lastFocusedShakeEvent = null;
+    resetMapView();
+    renderShakeDetection();
+  }, DETECTION_TIMEOUT_MS);
+}
+
+function updateShakeDetection(detection: ShakeDetection): void {
+  if (!settings.shakeDetectionEnabled || detection.count <= 0 || detection.confidence <= 0) {
+    clearShakeDetection();
+    return;
+  }
+
+  currentShakeDetection = detection;
+  const areas = highConfidenceAreas(detection);
+  if (settings.autoFocusEnabled && areas.length > 0 && lastFocusedShakeEvent !== detection.startedAt) {
+    if (focusMapOnAreas(areas)) lastFocusedShakeEvent = detection.startedAt;
+  }
+  renderShakeDetection();
+  scheduleShakeDetectionExpiry();
+}
+
+function applySettings(): void {
+  shakeDetectionToggle.checked = settings.shakeDetectionEnabled;
+  autoFocusToggle.checked = settings.autoFocusEnabled;
+  if (!settings.shakeDetectionEnabled) clearShakeDetection();
+  else if (!settings.autoFocusEnabled) {
+    lastFocusedShakeEvent = null;
+    resetMapView();
+  }
+  else if (currentShakeDetection) {
+    const areas = highConfidenceAreas(currentShakeDetection);
+    if (areas.length > 0 && lastFocusedShakeEvent !== currentShakeDetection.startedAt && focusMapOnAreas(areas)) {
+      lastFocusedShakeEvent = currentShakeDetection.startedAt;
+    }
+  }
+  renderShakeDetection();
+  saveSettings();
+}
 
 function formatTime(value: string): string {
   const date = new Date(value);
@@ -133,7 +343,8 @@ function intensityClass(scale: number | null): string {
 function renderMarkers(earthquakes: readonly Earthquake[], animateLatest = false): void {
   if (selectedEarthquakeId && !earthquakes.some((quake) => quake.id === selectedEarthquakeId)) selectedEarthquakeId = null;
   const latest = earthquakes[0];
-  const markerNodes: SVGGElement[] = [];
+  const historicalMarkerNodes: SVGGElement[] = [];
+  const latestMarkerNodes: SVGGElement[] = [];
   let mappableCount = 0;
   const drawable = [...earthquakes].reverse();
 
@@ -187,10 +398,12 @@ function renderMarkers(earthquakes: readonly Earthquake[], animateLatest = false
       pulse.setAttribute('r', String(radius + 7));
       marker.prepend(pulse);
     }
-    markerNodes.push(marker);
+    if (isLatest) latestMarkerNodes.push(marker);
+    else historicalMarkerNodes.push(marker);
   }
 
-  earthquakeMarkers.replaceChildren(...markerNodes);
+  historicalEarthquakeMarkers.replaceChildren(...historicalMarkerNodes);
+  latestEarthquakeMarker.replaceChildren(...latestMarkerNodes);
   if (!latest) {
     mapStatus.textContent = '表示できる地震情報はありません';
     japanMap.setAttribute('aria-label', '日本地図。表示できる地震情報はありません');
@@ -227,6 +440,24 @@ function setConnectionState(state: 'live' | 'reconnecting' | 'offline'): void {
 function updateTimestamp(prefix = '最終更新'): void {
   updatedAt.textContent = `${prefix} ${new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
 }
+
+applySettings();
+
+settingsToggle.addEventListener('click', () => {
+  const shouldOpen = settingsPanel.hidden;
+  settingsPanel.hidden = !shouldOpen;
+  settingsToggle.setAttribute('aria-expanded', String(shouldOpen));
+}, { signal: lifecycle.signal });
+
+shakeDetectionToggle.addEventListener('change', () => {
+  settings = { ...settings, shakeDetectionEnabled: shakeDetectionToggle.checked };
+  applySettings();
+}, { signal: lifecycle.signal });
+
+autoFocusToggle.addEventListener('change', () => {
+  settings = { ...settings, autoFocusEnabled: autoFocusToggle.checked };
+  applySettings();
+}, { signal: lifecycle.signal });
 
 list.addEventListener('click', (event) => {
   const target = event.target;
@@ -333,6 +564,17 @@ function connectWebSocket(): void {
     } catch {
       return;
     }
+
+    const parsedShakeDetection = parseShakeDetection(payload);
+    if (parsedShakeDetection) {
+      updateShakeDetection(parsedShakeDetection);
+      return;
+    }
+
+    // 561 is an individual user sensing message. It is parsed for protocol
+    // compatibility, but never becomes a detection trigger by itself.
+    if (parseUserquake(payload)) return;
+
     const earthquake = parseEarthquake(payload);
     if (!earthquake || !store.merge([earthquake])) return;
     renderAll(true);
@@ -360,6 +602,8 @@ window.addEventListener('pagehide', () => {
   historyController?.abort();
   if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
   reconnectTimer = undefined;
+  if (shakeDetectionTimer !== undefined) window.clearTimeout(shakeDetectionTimer);
+  shakeDetectionTimer = undefined;
   if (socket) {
     const oldSocket = socket;
     socket = null;

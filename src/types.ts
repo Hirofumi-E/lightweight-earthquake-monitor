@@ -10,6 +10,30 @@ export interface P2PQuake {
   };
 }
 
+export interface P2PUserquake {
+  id?: string;
+  code: number;
+  time?: string;
+  area?: number;
+}
+
+export interface P2PAreaConfidence {
+  confidence?: number;
+  count?: number;
+  display?: string;
+}
+
+export interface P2PUserquakeEvaluation {
+  id?: string;
+  code: number;
+  time?: string;
+  count?: number;
+  confidence?: number;
+  started_at?: string;
+  updated_at?: string;
+  area_confidences?: Record<string, P2PAreaConfidence>;
+}
+
 export interface Earthquake {
   id: string;
   time: string;
@@ -19,4 +43,23 @@ export interface Earthquake {
   depth: number | null;
   latitude: number | null;
   longitude: number | null;
+}
+
+export interface ShakeDetection {
+  id: string;
+  time: string;
+  count: number;
+  confidence: number;
+  startedAt: string;
+  updatedAt: string;
+  areaConfidences: ReadonlyMap<string, number>;
+}
+
+export interface EpspArea {
+  code: string;
+  region: string;
+  prefecture: string;
+  name: string;
+  latitude: number;
+  longitude: number;
 }

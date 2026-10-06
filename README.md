@@ -31,6 +31,14 @@ pnpm run dev
 
 [P2P地震情報 JSON API v2](https://www.p2pquake.net/develop/json_api_v2/) の `GET /history?codes=551&limit=10` で起動時の履歴を取得し、その後は `wss://api.p2pquake.net/v2/ws` から情報コード551（地震情報）をリアルタイム受信します。WebSocket切断時は1秒から最大30秒までの指数バックオフで自動再接続し、接続回復後にHTTPで履歴を一度取得して切断中の情報を補完します。LIVE表示は実際のWebSocket接続状態を示します。
 
+WebSocketでは、情報コード561（個別の地震感知情報）をプロトコル互換のために受信・解析しますが、単独では画面表示や自動フォーカスのトリガーにしません。情報コード9611（地震感知情報 解析結果）の `count > 0` かつ `confidence > 0` を揺れ検出中の判定に使います。`area_confidences` のうち信頼度が0.8以上（仕様上の信頼度A）の地域だけを地図上に表示します。これはP2P地震情報ユーザーの感知情報を解析した状態であり、地震発生の確定や気象庁の震度観測を示しません。9611の更新が30秒間ない場合は検出表示と一時フォーカスを解除します。
+
+## 動作設定と揺れ検出
+
+ヘッダーの「⚙ 設定」から、揺れ検出機能と信頼度A地域への自動フォーカスを切り替えられます。設定は `localStorage` の `lightweight-earthquake-monitor.settings` に保存します。リアルタイム震度はデータソース準備中のため無効表示です。
+
+地域コード・地域名・地方名・緯度・経度は、P2P地震情報公式リポジトリの [`epsp-area.csv`](https://github.com/p2pquake/epsp-specifications/blob/master/epsp-area.csv) から開発時に抽出した [`src/epspAreas.json`](src/epspAreas.json) を使用します。実行時に外部CSVは取得しません。地域位置も日本地図・震源と同じ投影設定を使います。
+
 ## 日本地図データ
 
 地図は気象庁の[予報区等GISデータ「地震情報／都道府県等」](https://www.data.jma.go.jp/developer/gis.html)を元に生成しています。配布ShapefileはJGD2011（日本測地系2011）座標系です。元データは国土地理院の数値地図等を使用して作成されたと気象庁が案内しています。
@@ -55,6 +63,9 @@ python3 scripts/generate-japan-map.py /path/to/20190125_AreaInformationPrefectur
 - 都道府県境界を含むローカルSVG日本地図と、直近10件の震源表示
 - 起動時のHTTP履歴取得とWebSocketによるリアルタイム更新
 - WebSocketの自動再接続、再接続後のHTTP履歴補完、接続状態表示
+- 動作設定のlocalStorage保存（揺れ検出・自動フォーカス）
+- 9611解析結果による揺れ検出表示、信頼度A地域マーカー、30秒無更新時の解除
+- 561の個別感知情報の受信解析（単独での警告・ズーム・ユーザー位置表示はなし）
 - 初回ローディング表示、通信失敗時のエラー表示と再試行
 - 情報IDによる重複排除（直近256 IDを保持）
 - PCでは情報パネルと大きな地図を左右に配置し、小画面では上下に配置

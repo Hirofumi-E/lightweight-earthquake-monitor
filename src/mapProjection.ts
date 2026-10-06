@@ -15,10 +15,10 @@ const mapScale = (viewBoxSize - 2 * padding) / Math.max(
   maxLatitude - minLatitude,
 );
 
-/** Shared equirectangular projection used for both the GIS SVG and epicenters. */
-export function projectEpicenter(earthquake: Pick<Earthquake, 'latitude' | 'longitude'>): MapPoint | null {
-  const { latitude, longitude } = earthquake;
-  if (latitude === null || longitude === null || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+export const MAP_VIEWBOX = { x: 0, y: 0, width: viewBoxSize, height: viewBoxSize } as const;
+
+export function projectCoordinates(latitude: number, longitude: number): MapPoint | null {
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
   if (
     longitude < minLongitude || longitude > maxLongitude ||
     latitude < minLatitude || latitude > maxLatitude
@@ -28,4 +28,11 @@ export function projectEpicenter(earthquake: Pick<Earthquake, 'latitude' | 'long
     x: viewBoxSize / 2 + (longitude - centerLongitude) * longitudeScale * mapScale,
     y: viewBoxSize / 2 - (latitude - centerLatitude) * mapScale,
   };
+}
+
+/** Shared equirectangular projection used for both the GIS SVG and epicenters. */
+export function projectEpicenter(earthquake: Pick<Earthquake, 'latitude' | 'longitude'>): MapPoint | null {
+  const { latitude, longitude } = earthquake;
+  if (latitude === null || longitude === null || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return projectCoordinates(latitude, longitude);
 }
