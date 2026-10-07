@@ -142,7 +142,7 @@ button { color: inherit; font: inherit; }
 .map-legend .legend-eew { background: #f3c36e; box-shadow: 0 0 0 3px #f3c36e33; }
 .map-legend .legend-detection { background: #e2aa61; box-shadow: 0 0 0 3px #e2aa6133; }
 .map-legend .legend-past { background: #82b5d7; opacity: .75; }
-.map-controls { position: fixed; z-index: 5; top: 102px; left: 50%; display: flex; gap: 4px; transform: translateX(-50%); pointer-events: auto; }
+.map-controls { position: absolute; z-index: 5; top: auto; right: 12px; bottom: 42px; left: auto; display: flex; gap: 4px; transform: none; pointer-events: auto; }
 .map-controls button { min-width: 29px; height: 27px; padding: 0 7px; border: 1px solid #3c596b; border-radius: 3px; background: #12212dcc; color: #d3e1ea; font-size: 14px; line-height: 1; cursor: pointer; }
 .map-controls button:hover, .map-controls button:focus-visible { border-color: #82abc3; background: #1b3444ee; color: #f1f7fb; outline: none; }
 .map-controls button:last-child { font-size: 10px; }
@@ -295,7 +295,7 @@ button.retry-button { padding: 5px 9px; border: 1px solid #704d45; border-radius
   .monitor-status > strong, .monitor-status .monitor-secondary { display: none; }
   .monitor-compact-time { display: inline-flex !important; }
   .map-controls { bottom: 42px; }
-  .information-panel-toggle { left: calc(62% - 9px); }
+  .information-panel-toggle { left: calc(100% - max(190px, 38%) - 8px); }
   .test-panel { z-index: 7; top: 43px; right: 8px; width: min(440px, calc(100% - 16px)); max-height: calc(100% - 51px); }
 }
 
@@ -353,24 +353,23 @@ button.retry-button { padding: 5px 9px; border: 1px solid #704d45; border-radius
   .quake-row time, .row-measure { font-size: 7px; }
   .quake-place { font-size: 8px; }
   .row-measure small { margin-top: 1px; font-size: 6px; }
-  .information-panel-toggle { top: 50%; right: 5px; left: auto; transform: translateY(-50%); }
-  .workspace.is-panel-open .information-panel-toggle { right: min(230px, calc(100vw - 54px)); }
+  .information-panel-toggle { top: 50%; right: 0; left: auto; transform: translateY(-50%); }
+  .workspace.is-panel-open .information-panel-toggle { right: calc(min(230px, calc(100vw - 54px)) - 8px); left: auto; }
   .map-legend { display: none; }
-  .map-controls { top: auto !important; right: 7px !important; bottom: 36px; left: auto !important; transform: none !important; gap: 3px; }
+  .map-controls { top: auto !important; right: 7px !important; bottom: 48px; left: auto !important; transform: none !important; gap: 3px; }
   .map-controls button { min-width: 25px; height: 23px; padding: 0 5px; }
   .map-attribution, .map-status { display: none; }
   .monitor-status { right: 8px; bottom: 7px; left: 8px; justify-content: flex-start; max-width: none; gap: 3px 9px; padding: 5px 7px; font-size: 9px; }
   .monitor-status > strong, .monitor-status .monitor-secondary { display: none; }
   .monitor-compact-time { display: inline-flex !important; }
   .information-panel-toggle { z-index: 5; width: 16px; height: 42px; padding: 0; border: 1px solid #476173; border-radius: 4px 0 0 4px; background: #12212de8; color: #d9e7ef; font-size: 12px; cursor: pointer; }
-  .map-controls { bottom: 48px; }
   .compact-priority-alert { top: 6px; max-width: calc(100% - 58px); font-size: 9px; }
   .compact-priority-alert:not([hidden]) { display: block; }
   .shake-status { display: none !important; }
   .test-panel { z-index: 7; top: 45px; right: 6px; width: min(440px, calc(100% - 12px)); max-height: calc(100% - 51px); }
 }
 
-.information-panel-toggle { position: absolute; z-index: 5; top: 50%; left: calc(69% - 8px); width: 16px; height: 42px; transform: translateY(-50%); padding: 0; border: 1px solid #476173; border-radius: 4px 0 0 4px; background: #12212de8; color: #d9e7ef; font-size: 12px; cursor: pointer; }
+.information-panel-toggle { position: absolute; z-index: 5; top: 50%; left: calc(100% - max(320px, 31%) - 8px); width: 16px; height: 42px; transform: translateY(-50%); padding: 0; border: 1px solid #476173; border-radius: 4px 0 0 4px; background: #12212de8; color: #d9e7ef; font-size: 12px; cursor: pointer; }
 .information-panel-toggle:hover, .information-panel-toggle:focus-visible { border-color: #8db9d6; background: #1b3444; outline: none; }
 .workspace.is-panel-closed { grid-template-columns: minmax(0, 1fr); }
 .workspace.is-panel-closed .information-panel { display: none; }

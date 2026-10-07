@@ -2,7 +2,7 @@ import './style.css';
 import { fetchRecentEarthquakes, parseEarthquake, parseEew, parseEewDetection, parseShakeDetection, parseUserquake } from './api';
 import { AudioNotifier, type AudioCue, type AudioNotifyResult } from './audioNotifier';
 import { EarthquakeStore } from './earthquakeStore';
-import { MAP_VIEWBOX, projectCoordinates, projectEpicenter } from './mapProjection';
+import { COMPACT_MAP_VIEWBOX, MAP_VIEWBOX, projectCoordinates, projectEpicenter } from './mapProjection';
 import areasData from './epspAreas.json';
 import { calculateLatency, formatAge, formatClock, formatLatency, parseP2pTimestamp, type LatencyValue } from './timeUtils';
 import type { Earthquake, EewArea, EewMessage, EpspArea, ShakeDetection } from './types';
@@ -201,7 +201,7 @@ app.innerHTML = `
           </g>
           <g id="eew-marker" class="eew-marker" aria-label="EEW震源" />
         </svg>
-        <div class="map-controls" aria-label="地図操作" style="position:fixed;top:102px;left:50%;right:auto;z-index:5;display:flex;gap:4px;transform:translateX(-50%)">
+        <div class="map-controls" aria-label="地図操作">
           <button id="map-zoom-in" type="button" aria-label="地図を拡大" title="拡大">＋</button>
           <button id="map-zoom-out" type="button" aria-label="地図を縮小" title="縮小">−</button>
           <button id="map-reset" type="button" aria-label="日本全国を表示" title="全国">全国</button>
@@ -632,6 +632,7 @@ function renderCompactPriorityAlert(): void {
 
 let panelPreference: boolean | null = null;
 const compactPanelMedia = window.matchMedia('(max-width: 450px)');
+const compactMapMedia = window.matchMedia('(max-width: 700px)');
 
 function syncInformationPanelToggle(): void {
   const isOpen = panelPreference ?? !compactPanelMedia.matches;
@@ -721,7 +722,16 @@ function setMapViewBox(viewBox: MapViewBox): void {
 }
 
 function resetMapView(): void {
-  setMapViewBox(MAP_VIEWBOX);
+  setMapViewBox(compactMapMedia.matches ? COMPACT_MAP_VIEWBOX : MAP_VIEWBOX);
+}
+
+function isNationViewBox(viewBox: MapViewBox): boolean {
+  return [MAP_VIEWBOX, COMPACT_MAP_VIEWBOX].some((nation) =>
+    Math.abs(viewBox.x - nation.x) < 0.01 &&
+    Math.abs(viewBox.y - nation.y) < 0.01 &&
+    Math.abs(viewBox.width - nation.width) < 0.01 &&
+    Math.abs(viewBox.height - nation.height) < 0.01,
+  );
 }
 
 function markMapUserInteraction(): void {
@@ -1635,6 +1645,10 @@ informationPanelToggle.addEventListener('click', () => {
 compactPanelMedia.addEventListener('change', () => {
   if (panelPreference === null) syncInformationPanelToggle();
 }, { signal: lifecycle.signal });
+compactMapMedia.addEventListener('change', () => {
+  if (mapManualOverride || activeEew || currentShakeDetection || selectedEarthquakeId) return;
+  if (isNationViewBox(readMapViewBox())) resetMapView();
+}, { signal: lifecycle.signal });
 japanMap.addEventListener('pointerdown', handleMapPointerDown, { signal: lifecycle.signal });
 japanMap.addEventListener('pointermove', handleMapPointerMove, { signal: lifecycle.signal });
 japanMap.addEventListener('pointerup', finishMapDrag, { signal: lifecycle.signal });
@@ -1664,6 +1678,7 @@ function requestTestAudio(cue: AudioCue): void {
 
 applySettings();
 syncInformationPanelToggle();
+resetMapView();
 
 settingsToggle.addEventListener('click', () => {
   const shouldOpen = settingsPanel.hidden;

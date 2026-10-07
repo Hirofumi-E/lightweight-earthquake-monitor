@@ -17,6 +17,9 @@ const mapScale = (viewBoxSize - 2 * padding) / Math.max(
 
 export const MAP_VIEWBOX = { x: 0, y: 0, width: viewBoxSize, height: viewBoxSize } as const;
 
+/** Tighter nationwide framing for compact windows; all prefecture paths remain inside. */
+export const COMPACT_MAP_VIEWBOX = { x: 0, y: 0, width: 680, height: 680 } as const;
+
 export function projectCoordinates(latitude: number, longitude: number): MapPoint | null {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
   if (
