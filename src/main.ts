@@ -209,10 +209,10 @@ app.innerHTML = `
         <section id="monitor-status" class="monitor-status" aria-label="受信監視">
           <strong>受信監視</strong>
           <span><b>WebSocket</b><i id="monitor-connection">OFFLINE</i></span>
-          <span><b>${isTestMode ? '最終テスト受信' : '最終WebSocket受信'}</b><i id="monitor-last-receive">待機中</i></span>
-          <span><b>最新EEW</b><i id="monitor-latest-eew">待機中</i></span>
-          <span><b>揺れ検出</b><i id="monitor-shake">待機中</i></span>
-          <span><b>最新地震情報受信</b><i id="monitor-latest-quake">待機中</i></span>
+          <span class="monitor-secondary"><b>${isTestMode ? '最終テスト受信' : '最終WebSocket受信'}</b><i id="monitor-last-receive">待機中</i></span>
+          <span class="monitor-secondary"><b>最新EEW</b><i id="monitor-latest-eew">待機中</i></span>
+          <span class="monitor-secondary"><b>揺れ検出</b><i id="monitor-shake">待機中</i></span>
+          <span class="monitor-secondary"><b>最新地震情報受信</b><i id="monitor-latest-quake">待機中</i></span>
           <span><b>履歴同期</b><i id="monitor-history-sync">待機中</i></span>
         </section>
         ${isTestMode ? `

@@ -260,6 +260,94 @@ button.retry-button { padding: 5px 9px; border: 1px solid #704d45; border-radius
   .row-scale b { width: 35px; height: 35px; }
 }
 
+@media (min-width: 701px) and (max-width: 900px) {
+  .topbar { padding-right: 12px; padding-left: 12px; }
+  .brand { font-size: 13px; white-space: nowrap; }
+  .test-mode-banner, .sandbox-banner { gap: 5px; margin-right: 8px; padding: 4px 6px; }
+  .test-mode-banner span, .sandbox-banner span { display: none; }
+  .header-actions { gap: 5px; }
+  .shake-status { max-width: 190px; padding: 4px 6px; font-size: 9px; }
+  .shake-status small { display: none; }
+  .live-description { display: none; }
+  .settings-toggle { white-space: nowrap; }
+}
+
+/* Compact overlay layout for small desktop windows (for example 600×500).
+   Tall phone viewports keep the existing stacked mobile layout. */
+@media ((max-width: 700px) and (max-height: 700px)), (max-height: 450px) {
+  body { min-width: 320px; min-height: 0; overflow: hidden; }
+  .shell { min-height: 0; height: 100dvh; grid-template-rows: 42px minmax(0, 1fr); }
+  .topbar { min-width: 0; gap: 5px; padding: 0 8px; }
+  .brand { flex: 0 0 auto; font-size: 0; }
+  .brand::before { content: "LEM"; color: #edf3f8; font-size: 11px; font-weight: 700; letter-spacing: .04em; }
+  .test-mode-banner, .sandbox-banner { flex: 0 1 auto; min-width: 0; margin: 0 auto 0 0; padding: 3px 5px; gap: 4px; font-size: 8px; }
+  .test-mode-banner span, .sandbox-banner span { display: none; }
+  .test-mode-banner strong, .sandbox-banner strong { font-size: 8px; }
+  .test-panel-toggle { flex: 0 0 auto; padding: 3px 5px; font-size: 8px; }
+  .header-actions { flex: 0 0 auto; gap: 5px; }
+  .live { gap: 5px; padding: 5px 6px; font-size: 9px; }
+  .live-dot { width: 6px; height: 6px; }
+  .live-description { display: none; }
+  .settings-toggle { padding: 5px 7px; font-size: 9px; }
+  .shake-status { position: fixed; z-index: 5; top: 47px; right: 8px; max-width: min(260px, calc(100vw - 104px)); padding: 4px 6px; font-size: 9px; }
+  .shake-status small { display: none; }
+  .shake-status-detail { overflow: hidden; font-size: 8px; text-overflow: ellipsis; }
+  .settings-panel { top: calc(100% + 4px); right: 8px; max-height: calc(100dvh - 50px); padding: 10px 12px; }
+
+  .workspace { position: relative; display: block; min-height: 0; height: 100%; overflow: hidden; }
+  .map-panel { position: absolute; inset: 0; display: grid; place-items: center; }
+  .japan-map { width: 100%; height: 100%; max-width: 100%; max-height: 100%; transform: translateX(clamp(24px, 8vw, 48px)); }
+  .information-panel { position: absolute; z-index: 2; top: 8px; bottom: auto !important; left: 8px; width: min(225px, calc(100vw - 112px)); height: max-content !important; max-height: calc(100% - 16px); min-height: 0; display: flex; flex-direction: column; overflow: auto; border: 1px solid #263746; border-radius: 5px; background: #101a24ec; box-shadow: 0 5px 18px #0005; scrollbar-color: #405261 transparent; scrollbar-width: thin; }
+  .latest-panel { flex: 0 0 auto; padding: 8px 10px 6px; border-bottom: 1px solid var(--line); }
+  .panel-section-heading h2 { font-size: 12px; }
+  .latest-indicator { gap: 4px; font-size: 9px; }
+  .latest-indicator i { width: 6px; height: 6px; }
+  .latest-details { flex: 0 0 auto; min-height: 0; grid-template-columns: 38px minmax(0, 1fr); grid-template-rows: 14px 20px 18px 18px; column-gap: 9px; padding: 6px 0 3px; }
+  .loading { min-height: 54px; font-size: 9px; }
+  .latest-intensity-label { font-size: 8px; }
+  .scale-badge { width: 32px; height: 32px; border-radius: 4px; font-size: 15px; }
+  .latest-place { font-size: 14px; line-height: 1.2; }
+  .latest-time { font-size: 10px; }
+  .latest-measures { gap: 12px; padding-top: 2px; font-size: 9px; }
+  #latest-receive-metrics, #eew-receive-metrics { display: none !important; }
+  .eew-details { flex: 0 0 auto; min-height: 0; gap: 3px; padding: 7px 0 5px; }
+  .eew-heading-row { font-size: 11px; }
+  .eew-report { font-size: 16px; }
+  .eew-place-label { font-size: 8px; }
+  .eew-place { font-size: 14px; }
+  .eew-time, .eew-measures { font-size: 10px; }
+  .eew-forecast { margin-top: 1px; padding-top: 5px; font-size: 9px; }
+  .eew-forecast strong { font-size: 16px; }
+  .eew-arrival-state { font-size: 9px; }
+  .eew-forecast-areas, .eew-disclaimer { font-size: 8px; }
+  .eew-cancelled { flex: 0 0 auto; min-height: 70px; font-size: 12px; }
+  .panel-update { padding-top: 5px; font-size: 9px; }
+  .history-panel { flex: 0 1 auto; min-height: 0; padding-top: 7px; }
+  .history-panel > .panel-section-heading { padding: 0 10px 5px; }
+  .history-panel > .panel-section-heading h2 { font-size: 11px; }
+  .history-panel > .panel-section-heading p { display: none; }
+  .event-count { font-size: 9px; }
+  .earthquake-list { flex: 0 0 auto; overflow: hidden; }
+  .list-loading, .empty-state { min-height: 38px; padding: 7px; font-size: 9px; }
+  .quake-row { min-height: 37px; grid-template-columns: 30px minmax(0, 1fr) 58px; grid-template-rows: 15px 14px; column-gap: 6px; padding: 3px 7px 3px 9px; }
+  .quake-row:nth-child(n + 4) { display: none; }
+  .quake-row time { font-size: 8px; }
+  .quake-place { font-size: 9px; }
+  .row-scale { font-size: 7px; }
+  .row-scale b { width: 27px; height: 27px; font-size: 12px; }
+  .row-measure { font-size: 8px; }
+  .row-measure small { margin-top: 2px; font-size: 7px; }
+
+  .map-legend { display: none; }
+  .map-controls { top: auto !important; right: 8px !important; bottom: 43px; left: auto !important; transform: none !important; gap: 3px; }
+  .map-controls button { min-width: 27px; height: 25px; padding: 0 6px; }
+  .monitor-status { right: 8px; bottom: 8px; left: auto; display: flex; justify-content: flex-end; max-width: calc(100% - 16px); gap: 3px 8px; padding: 4px 6px; font-size: 8px; }
+  .monitor-status > strong, .monitor-status > .monitor-secondary { display: none; }
+  .monitor-status span { font-size: 8px; }
+  .map-attribution, .map-status { display: none; }
+  .test-panel { z-index: 6; top: 45px; right: 8px; width: min(440px, calc(100% - 16px)); max-height: calc(100% - 53px); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
