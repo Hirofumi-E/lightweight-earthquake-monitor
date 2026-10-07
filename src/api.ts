@@ -14,7 +14,7 @@ import type {
 const API_URL = 'https://api.p2pquake.net/v2/history?codes=551&limit=10';
 
 export async function fetchRecentEarthquakes(signal?: AbortSignal): Promise<Earthquake[]> {
-  const response = await fetch(API_URL, { signal, headers: { Accept: 'application/json' } });
+  const response = await fetch(API_URL, { signal, cache: 'no-store', headers: { Accept: 'application/json' } });
   if (!response.ok) throw new Error(`地震情報を取得できませんでした (HTTP ${response.status})`);
 
   const payload: unknown = await response.json();

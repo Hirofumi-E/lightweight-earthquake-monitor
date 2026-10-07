@@ -25,6 +25,7 @@ const MAX_RAW_SENSING_IDS = 256;
 const EEW_TIMEOUT_MS = 120_000;
 const EEW_CANCEL_DISPLAY_MS = 5_000;
 const MAX_EEW_EVENTS = 4;
+const HISTORY_SYNC_INTERVAL_MS = 15_000;
 const MAX_MAP_ZOOM = 8;
 const MAP_ZOOM_FACTOR = 1.35;
 const EEW_SCALE_CODES = new Set([0, 10, 20, 30, 40, 45, 50, 55, 60, 70, 99]);
@@ -212,6 +213,7 @@ app.innerHTML = `
           <span><b>最新EEW</b><i id="monitor-latest-eew">待機中</i></span>
           <span><b>揺れ検出</b><i id="monitor-shake">待機中</i></span>
           <span><b>最新地震情報受信</b><i id="monitor-latest-quake">待機中</i></span>
+          <span><b>履歴同期</b><i id="monitor-history-sync">待機中</i></span>
         </section>
         ${isTestMode ? `
         <section id="test-panel" class="test-panel" aria-label="TEST PANEL" hidden>
@@ -223,6 +225,7 @@ app.innerHTML = `
             <div class="test-control-group" aria-label="地震情報テスト">
               <span class="test-control-label">地震情報</span>
               <button type="button" data-test-action="quake">通常地震を発生</button>
+              <button type="button" data-test-action="history-backfill">履歴補完をシミュレート</button>
             </div>
             <div class="test-control-group" aria-label="揺れ検出テスト">
               <span class="test-control-label">揺れ検出</span>
@@ -317,6 +320,7 @@ const monitorLastReceive = document.querySelector<HTMLElement>('#monitor-last-re
 const monitorLatestEew = document.querySelector<HTMLElement>('#monitor-latest-eew')!;
 const monitorShake = document.querySelector<HTMLElement>('#monitor-shake')!;
 const monitorLatestQuake = document.querySelector<HTMLElement>('#monitor-latest-quake')!;
+const monitorHistorySync = document.querySelector<HTMLElement>('#monitor-history-sync')!;
 const settingsToggle = document.querySelector<HTMLButtonElement>('#settings-toggle')!;
 const settingsPanel = document.querySelector<HTMLElement>('#settings-panel')!;
 const shakeDetectionToggle = document.querySelector<HTMLInputElement>('#shake-detection-toggle')!;
@@ -345,6 +349,7 @@ let disposed = false;
 let historyRequestInFlight = false;
 let queuedHistorySync = false;
 let historyController: AbortController | undefined;
+let historySyncTimer: number | undefined;
 let socket: WebSocket | null = null;
 let reconnectTimer: number | undefined;
 let reconnectAttempt = 0;
@@ -370,6 +375,7 @@ const earthquakeReceiveTimings = new Map<string, ReceiveTiming>();
 const earthquakeReceiveTimingOrder: string[] = [];
 let currentShakeReceiveTiming: ReceiveTiming | null = null;
 let lastWebSocketReceivedAt: number | null = null;
+let lastHistorySyncSucceededAt: number | null = null;
 let receiveAgeTimer: number | undefined;
 let shakeDetectionTimer: number | undefined;
 let lastFocusedShakeEvent: string | null = null;
@@ -408,6 +414,7 @@ let mapDragFrame: number | undefined;
 type TestFixturesModule = typeof import('./testFixtures/fixtures');
 let testFixtures: TestFixturesModule | null = null;
 let testEarthquakeSequence = 0;
+let testBackfillSequence = 0;
 const testLogs: string[] = [];
 
 function readSettings(): MonitorSettings {
@@ -625,6 +632,7 @@ function updateReceiveAgeDisplays(): void {
     monitorShake.textContent = `感知速報 ${count}件: ${details}${entries.length > 3 ? ` / +${entries.length - 3}地域` : ''}`;
   } else monitorShake.textContent = '待機中';
   monitorLatestQuake.textContent = latestTiming ? formatAge(latestTiming.browserReceivedAt) : '待機中';
+  monitorHistorySync.textContent = lastHistorySyncSucceededAt === null ? '待機中' : `HTTP ${formatAge(lastHistorySyncSucceededAt)}`;
   latestReceivedAge.textContent = latestTiming ? formatAge(latestTiming.browserReceivedAt) : '待機中';
   if (activeEew) eewReceivedAge.textContent = formatAge(activeEew.receiveTiming.browserReceivedAt);
   updateCurrentTime();
@@ -1479,6 +1487,15 @@ function renderAll(animateLatest = false): void {
   document.querySelector('#refresh-error')?.remove();
 }
 
+function mergeEarthquakeHistory(earthquakes: readonly Earthquake[], browserReceivedAt: number, animateLatest = false): boolean {
+  rememberHistoryReceiveTimings(earthquakes, browserReceivedAt);
+  const changed = store.merge(earthquakes);
+  if (changed || !hasLoaded) renderAll(animateLatest);
+  hasLoaded = true;
+  updateReceiveAgeDisplays();
+  return changed;
+}
+
 function setConnectionState(state: 'live' | 'reconnecting' | 'offline'): void {
   connectionStatus.classList.remove('is-live', 'is-reconnecting', 'is-offline');
   connectionStatus.classList.add(`is-${state}`);
@@ -1694,6 +1711,7 @@ function setTestControlsEnabled(enabled: boolean): void {
 
 function resetTestState(): void {
   testEarthquakeSequence = 0;
+  testBackfillSequence = 0;
   audioNotifier.clearPending();
   earthquakeReceiveTimings.clear();
   earthquakeReceiveTimingOrder.length = 0;
@@ -1722,6 +1740,17 @@ function runTestAction(action: string): void {
       testEarthquakeSequence += 1;
       handleIncomingPayload(testFixtures.createTestEarthquake(testEarthquakeSequence), 'test');
       break;
+    case 'history-backfill': {
+      testBackfillSequence += 1;
+      const earthquake = parseEarthquake(testFixtures.createTestHistoryBackfill(testBackfillSequence));
+      if (earthquake) {
+        const changed = mergeEarthquakeHistory([earthquake], Date.now());
+        addTestLog(changed
+          ? `HTTP history fixture merged: ${earthquake.id}`
+          : `HTTP history fixture duplicate: ${earthquake.id}`);
+      }
+      break;
+    }
     case 'shake-start':
       handleIncomingPayload(testFixtures.createTestShakeStart(), 'test');
       break;
@@ -1803,12 +1832,16 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 }
 
-async function loadHistory(reason: 'startup' | 'retry' | 'reconnect'): Promise<void> {
+type HistorySyncReason = 'startup' | 'retry' | 'reconnect' | 'periodic' | 'resume' | 'online';
+
+async function loadHistory(reason: HistorySyncReason): Promise<void> {
   // TEST MODE is completely offline. Keep this guard at the HTTP boundary so
   // future callers cannot accidentally fetch production history.
   if (isTestMode || disposed) return;
   if (historyRequestInFlight) {
-    if (reason === 'reconnect') queuedHistorySync = true;
+    // Timer ticks are intentionally dropped while any request is in flight.
+    // Lifecycle/reconnect triggers are coalesced into one follow-up request.
+    if (reason !== 'periodic') queuedHistorySync = true;
     return;
   }
 
@@ -1822,20 +1855,20 @@ async function loadHistory(reason: 'startup' | 'retry' | 'reconnect'): Promise<v
         const earthquakes = await fetchRecentEarthquakes(controller.signal);
         const browserReceivedAt = Date.now();
         if (disposed) return;
-        rememberHistoryReceiveTimings(earthquakes, browserReceivedAt);
-        if (store.merge(earthquakes) || !hasLoaded) renderAll();
-        hasLoaded = true;
+        mergeEarthquakeHistory(earthquakes, browserReceivedAt);
+        lastHistorySyncSucceededAt = browserReceivedAt;
+        updateReceiveAgeDisplays();
         document.querySelector('#refresh-error')?.remove();
       } catch (error) {
         if (disposed || (error instanceof DOMException && error.name === 'AbortError')) return;
         const message = error instanceof Error ? error.message : '通信に失敗しました';
-        if (!hasLoaded) {
+        if (!hasLoaded && reason !== 'periodic') {
           latestLoading.hidden = false;
           latestLoading.innerHTML = `<div class="error-state"><strong>情報を取得できませんでした</strong><span>${escapeHtml(message)}</span><button id="retry-button" class="retry-button" type="button">再試行</button></div>`;
           mapStatus.textContent = '地震情報を取得できませんでした';
           list.innerHTML = '<div class="empty-state">通信が回復すると地震情報を表示します</div>';
           document.querySelector<HTMLButtonElement>('#retry-button')?.addEventListener('click', () => void loadHistory('retry'), { once: true, signal: lifecycle.signal });
-        } else {
+        } else if (hasLoaded && reason !== 'periodic') {
           let notice = document.querySelector<HTMLDivElement>('#refresh-error');
           if (!notice) {
             notice = document.createElement('div');
@@ -1852,6 +1885,21 @@ async function loadHistory(reason: 'startup' | 'retry' | 'reconnect'): Promise<v
     historyController = undefined;
   }
 }
+
+function startHistorySyncTimer(): void {
+  if (isTestMode || disposed || historySyncTimer !== undefined) return;
+  historySyncTimer = window.setInterval(() => void loadHistory('periodic'), HISTORY_SYNC_INTERVAL_MS);
+}
+
+function requestHistoryOnResume(): void {
+  if (isTestMode || disposed || document.visibilityState !== 'visible') return;
+  void loadHistory('resume');
+}
+
+document.addEventListener('visibilitychange', requestHistoryOnResume, { signal: lifecycle.signal });
+window.addEventListener('online', () => {
+  if (!isTestMode && !disposed) void loadHistory('online');
+}, { signal: lifecycle.signal });
 
 type IncomingPayloadSource = 'websocket' | 'test';
 
@@ -1920,15 +1968,13 @@ function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource =
   const earthquake = parseEarthquake(payload);
   if (!earthquake) return;
   const receiveTiming = createReceiveTiming(payload, browserReceivedAt, payloadString(payload, 'issue', 'time'));
-  if (!store.merge([earthquake])) {
+  if (!mergeEarthquakeHistory([earthquake], browserReceivedAt, true)) {
     if (source === 'test') {
       addTestLog(`551 duplicate ignored: ${earthquake.id}`);
       addTestLog('audio suppressed: duplicate');
     }
     return;
   }
-  rememberEarthquakeReceiveTiming(earthquake.id, receiveTiming);
-  renderAll(true);
   if (settings.earthquakeAudioEnabled) notifyAudio('earthquake');
   if (source === 'test') {
     addTestTimingLog('551', receiveTiming);
@@ -2020,6 +2066,7 @@ async function initializeTestMode(): Promise<void> {
 
 function initializeProductionMode(): void {
   if (isTestMode || disposed) return;
+  startHistorySyncTimer();
   void loadHistory('startup').finally(() => {
     // Keep the production startup path isolated from TEST MODE. The guards in
     // loadHistory/connectWebSocket are an additional safety net for future
@@ -2034,6 +2081,8 @@ window.addEventListener('pagehide', () => {
   historyController?.abort();
   if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
   reconnectTimer = undefined;
+  if (historySyncTimer !== undefined) window.clearInterval(historySyncTimer);
+  historySyncTimer = undefined;
   if (receiveAgeTimer !== undefined) window.clearInterval(receiveAgeTimer);
   receiveAgeTimer = undefined;
   if (shakeDetectionTimer !== undefined) window.clearTimeout(shakeDetectionTimer);

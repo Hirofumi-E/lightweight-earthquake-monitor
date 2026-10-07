@@ -42,6 +42,12 @@ export function createTestEarthquake(sequence: number): P2PQuake {
   };
 }
 
+/** A distinct synthetic 551 payload for exercising the HTTP merge path. */
+export function createTestHistoryBackfill(sequence: number): P2PQuake {
+  const earthquake = createTestEarthquake(1_000 + Math.max(1, Math.trunc(sequence)));
+  return { ...earthquake, id: `test-551-history-${sequence}` };
+}
+
 /** Synthetic individual 561 reports, using catalog area codes. */
 export function createTestUserquake(area: number): P2PUserquake {
   return { id: `test-561-${area}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, code: 561, time: p2pTime(), area };
