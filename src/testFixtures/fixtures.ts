@@ -1,4 +1,4 @@
-import type { P2PEEW, P2PQuake, P2PUserquakeEvaluation } from '../types';
+import type { P2PEEW, P2PQuake, P2PUserquake, P2PUserquakeEvaluation } from '../types';
 
 /**
  * Development-only payloads. These are deliberately synthetic and never represent
@@ -42,6 +42,11 @@ export function createTestEarthquake(sequence: number): P2PQuake {
   };
 }
 
+/** Synthetic individual 561 reports, using catalog area codes. */
+export function createTestUserquake(area: number): P2PUserquake {
+  return { id: `test-561-${area}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, code: 561, time: p2pTime(), area };
+}
+
 let shakeStartedAt: string | null = null;
 
 function ensureShakeStartedAt(): string {
@@ -62,7 +67,7 @@ export function createTestShakeStart(): P2PUserquakeEvaluation {
     updated_at: time,
     area_confidences: {
       '010': { confidence: 0.86, count: 2 },
-      '250': { confidence: 0.82, count: 1 },
+      '241': { confidence: 0.72, count: 1 },
     },
   };
 }
@@ -79,7 +84,7 @@ export function createTestShakeUpdate(): P2PUserquakeEvaluation {
     updated_at: time,
     area_confidences: {
       '010': { confidence: 0.94, count: 4 },
-      '250': { confidence: 0.9, count: 2 },
+      '241': { confidence: 0.7, count: 2 },
       '350': { confidence: 0.81, count: 1 },
     },
   };

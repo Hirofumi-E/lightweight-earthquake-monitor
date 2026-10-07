@@ -18,6 +18,10 @@ for (const area of epspAreas) {
 const SETTINGS_STORAGE_KEY = 'lightweight-earthquake-monitor.settings';
 const DETECTION_TIMEOUT_MS = 30_000;
 const HIGH_CONFIDENCE_THRESHOLD = 0.8;
+const MEDIUM_CONFIDENCE_THRESHOLD = 0.6;
+const RAW_SENSING_TTL_MS = 15_000;
+const MAX_RAW_SENSING_AREAS = 32;
+const MAX_RAW_SENSING_IDS = 256;
 const EEW_TIMEOUT_MS = 120_000;
 const EEW_CANCEL_DISPLAY_MS = 5_000;
 const MAX_EEW_EVENTS = 4;
@@ -85,7 +89,7 @@ app.innerHTML = `
       <section id="settings-panel" class="settings-panel" aria-label="動作設定" hidden>
       <div class="settings-heading"><h2>動作設定</h2><span>保存済み</span></div>
       <label class="settings-row">
-        <span><strong>揺れ検出機能</strong><small>9611解析結果を表示</small></span>
+        <span><strong>リアルタイム揺れ検知</strong><small>P2P感知情報 561 + 9611解析結果をリアルタイム表示</small></span>
         <input id="shake-detection-toggle" class="settings-checkbox" type="checkbox" checked />
       </label>
       <label class="settings-row">
@@ -100,10 +104,6 @@ app.innerHTML = `
         <span><strong>EEW受信時に震源へ自動フォーカス</strong><small>新しいeventIdで一度だけ移動</small></span>
         <input id="eew-auto-focus-toggle" class="settings-checkbox" type="checkbox" checked />
       </label>
-      <div class="settings-row is-disabled">
-        <span><strong>リアルタイム震度</strong><small>データソース準備中</small></span>
-        <input class="settings-checkbox" type="checkbox" disabled aria-label="リアルタイム震度（データソース準備中）" />
-      </div>
       <div class="settings-divider">音声通知</div>
       <label class="settings-row">
         <span><strong>音声通知</strong><small>ブラウザ生成の短い通知音</small></span>
@@ -137,7 +137,7 @@ app.innerHTML = `
           <button id="audio-test-eew" type="button">EEW</button>
         </div>
       </div>
-      <p class="settings-note">揺れ検出はP2P地震情報ユーザーの感知情報を解析した状態です。震度観測や地震発生の確定を示すものではありません。</p>
+      <p class="settings-note">561はユーザーの感知速報、9611はその解析結果です。いずれも地震計による震度観測や地震発生の確定を示すものではありません。</p>
       </section>
     </header>
     <main class="workspace">
@@ -192,6 +192,7 @@ app.innerHTML = `
           <g id="eew-prefecture-overlays" class="eew-prefecture-overlays" aria-label="EEW予測震度" />
           <g id="earthquake-markers" class="earthquake-markers" aria-label="最近の震源">
             <g id="historical-earthquake-markers" aria-label="過去の震源" />
+            <g id="raw-shake-markers" aria-label="P2P感知速報地域" />
             <g id="shake-detection-markers" class="shake-detection-markers" aria-label="揺れ検出地域" />
             <g id="latest-earthquake-marker" aria-label="最新の震源" />
           </g>
@@ -228,6 +229,12 @@ app.innerHTML = `
               <button type="button" data-test-action="shake-start">揺れ検出を開始</button>
               <button type="button" data-test-action="shake-update">揺れ検出を更新</button>
               <button type="button" data-test-action="shake-end">揺れ検出を終了</button>
+            </div>
+            <div class="test-control-group" aria-label="561 感知速報テスト">
+              <span class="test-control-label">561 感知速報</span>
+              <button type="button" data-test-action="561-tokyo">東京</button>
+              <button type="button" data-test-action="561-kanagawa">神奈川</button>
+              <button type="button" data-test-action="561-chiba">千葉</button>
             </div>
             <div class="test-control-group" aria-label="EEWテスト">
               <span class="test-control-label">EEW</span>
@@ -292,6 +299,7 @@ const eewCancelled = document.querySelector<HTMLElement>('#eew-cancelled')!;
 const japanMap = document.querySelector<SVGSVGElement>('#japan-map')!;
 const eewPrefectureOverlays = document.querySelector<SVGGElement>('#eew-prefecture-overlays')!;
 const shakeDetectionMarkers = document.querySelector<SVGGElement>('#shake-detection-markers')!;
+const rawShakeMarkers = document.querySelector<SVGGElement>('#raw-shake-markers')!;
 const historicalEarthquakeMarkers = document.querySelector<SVGGElement>('#historical-earthquake-markers')!;
 const latestEarthquakeMarker = document.querySelector<SVGGElement>('#latest-earthquake-marker')!;
 const eewMarker = document.querySelector<SVGGElement>('#eew-marker')!;
@@ -345,6 +353,10 @@ let selectedEarthquakeId: string | null = null;
 let settings = readSettings();
 const audioNotifier = new AudioNotifier(isEewSandbox);
 let currentShakeDetection: ShakeDetection | null = null;
+interface RawSensingAreaState { count: number; lastReceivedAt: number; }
+const rawSensingAreas = new Map<string, RawSensingAreaState>();
+const rawSensingIds = new Set<string>();
+const rawSensingIdOrder: string[] = [];
 interface ReceiveTiming {
   browserReceivedAt: number;
   basicTimestamp: string | null;
@@ -584,15 +596,34 @@ function updateCurrentTime(): void {
 }
 
 function updateReceiveAgeDisplays(): void {
+  const now = Date.now();
+  let expiredRawArea = false;
+  for (const [code, state] of rawSensingAreas) {
+    if (now - state.lastReceivedAt >= RAW_SENSING_TTL_MS) {
+      rawSensingAreas.delete(code);
+      expiredRawArea = true;
+    }
+  }
+  if (expiredRawArea) renderRawSensingMarkers();
   const latest = store.recent[0];
   const latestTiming = latest ? earthquakeReceiveTimings.get(latest.id) : undefined;
   monitorLastReceive.textContent = formatAge(lastWebSocketReceivedAt);
   monitorLatestEew.textContent = activeEew
     ? `受信 ${formatAge(activeEew.receiveTiming.browserReceivedAt)}`
     : eewCancelledMessageVisible ? '取消表示中' : '待機中';
-  monitorShake.textContent = currentShakeDetection && currentShakeReceiveTiming
-    ? `更新 ${formatAge(currentShakeReceiveTiming.browserReceivedAt)}`
-    : '待機中';
+  if (!settings.shakeDetectionEnabled) monitorShake.textContent = 'OFF';
+  else if (currentShakeDetection && currentShakeReceiveTiming) {
+    const categories = confidenceAreaCategories(currentShakeDetection);
+    monitorShake.textContent = `解析 ${currentShakeDetection.count}件 / A${categories.a.length} B${categories.b.length}地域 / ${formatAge(currentShakeReceiveTiming.browserReceivedAt)}`;
+  } else if (rawSensingAreas.size > 0) {
+    const entries = [...rawSensingAreas.entries()].sort((a, b) => b[1].lastReceivedAt - a[1].lastReceivedAt);
+    const count = entries.reduce((sum, [, area]) => sum + area.count, 0);
+    const details = entries.slice(0, 3).map(([code, area]) => {
+      const name = areaByCode.get(code)?.name ?? code;
+      return `${name} ${area.count}件・${formatAge(area.lastReceivedAt)}`;
+    }).join(' / ');
+    monitorShake.textContent = `感知速報 ${count}件: ${details}${entries.length > 3 ? ` / +${entries.length - 3}地域` : ''}`;
+  } else monitorShake.textContent = '待機中';
   monitorLatestQuake.textContent = latestTiming ? formatAge(latestTiming.browserReceivedAt) : '待機中';
   latestReceivedAge.textContent = latestTiming ? formatAge(latestTiming.browserReceivedAt) : '待機中';
   if (activeEew) eewReceivedAge.textContent = formatAge(activeEew.receiveTiming.browserReceivedAt);
@@ -731,6 +762,78 @@ function highConfidenceAreas(detection: ShakeDetection | null): Array<{ area: Ep
   return result;
 }
 
+function confidenceAreaCategories(detection: ShakeDetection): { a: Array<{ area: EpspArea; confidence: number }>; b: Array<{ area: EpspArea; confidence: number }> } {
+  const a: Array<{ area: EpspArea; confidence: number }> = [];
+  const b: Array<{ area: EpspArea; confidence: number }> = [];
+  for (const [code, confidence] of detection.areaConfidences) {
+    const area = areaByCode.get(code);
+    if (!area || confidence < MEDIUM_CONFIDENCE_THRESHOLD) continue;
+    (confidence >= HIGH_CONFIDENCE_THRESHOLD ? a : b).push({ area, confidence });
+  }
+  return { a, b };
+}
+
+function renderRawSensingMarkers(): void {
+  rawShakeMarkers.replaceChildren();
+  if (!settings.shakeDetectionEnabled) return;
+  const analyzedCodes = new Set<string>();
+  if (currentShakeDetection) {
+    for (const [code, confidence] of currentShakeDetection.areaConfidences) {
+      if (confidence >= MEDIUM_CONFIDENCE_THRESHOLD) analyzedCodes.add(String(Number(code)));
+    }
+  }
+  for (const [code, state] of rawSensingAreas) {
+    if (Date.now() - state.lastReceivedAt >= RAW_SENSING_TTL_MS || analyzedCodes.has(String(Number(code)))) continue;
+    const area = areaByCode.get(code);
+    if (!area) continue;
+    const point = projectCoordinates(area.latitude, area.longitude);
+    if (!point) continue;
+    const marker = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    marker.setAttribute('class', 'raw-sensing-marker');
+    marker.setAttribute('transform', `translate(${point.x} ${point.y})`);
+    marker.setAttribute('role', 'img');
+    marker.setAttribute('aria-label', `${area.name}、P2P感知速報 ${state.count}件`);
+    const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    ring.setAttribute('class', 'raw-sensing-ring');
+    ring.setAttribute('r', '9');
+    marker.append(ring);
+    const core = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    core.setAttribute('class', 'raw-sensing-core');
+    core.setAttribute('r', '3.5');
+    marker.append(core);
+    rawShakeMarkers.append(marker);
+  }
+}
+
+function receiveRawSensing(areaCode: number | undefined, id: string): string | null {
+  if (!settings.shakeDetectionEnabled || areaCode === undefined) return null;
+  if (rawSensingIds.has(id)) return areaByCode.get(String(areaCode))?.name ?? null;
+  rawSensingIds.add(id);
+  rawSensingIdOrder.push(id);
+  if (rawSensingIdOrder.length > MAX_RAW_SENSING_IDS) {
+    const oldest = rawSensingIdOrder.shift();
+    if (oldest) rawSensingIds.delete(oldest);
+  }
+  const code = String(areaCode);
+  const area = areaByCode.get(code);
+  if (!area) return null;
+  const previous = rawSensingAreas.get(code);
+  rawSensingAreas.set(code, { count: Math.min(999, (previous?.count ?? 0) + 1), lastReceivedAt: Date.now() });
+  if (rawSensingAreas.size > MAX_RAW_SENSING_AREAS) {
+    const oldestCode = [...rawSensingAreas.entries()].sort((a, b) => a[1].lastReceivedAt - b[1].lastReceivedAt)[0]?.[0];
+    if (oldestCode) rawSensingAreas.delete(oldestCode);
+  }
+  renderRawSensingMarkers();
+  return area.name;
+}
+
+function clearRawSensingState(): void {
+  rawSensingAreas.clear();
+  rawSensingIds.clear();
+  rawSensingIdOrder.length = 0;
+  renderRawSensingMarkers();
+}
+
 function focusMapOnPoints(points: Array<{ x: number; y: number }>, padding: number, minimumSize: number): boolean {
   if (points.length === 0) return false;
 
@@ -762,42 +865,37 @@ function focusMapOnEew(eew: EewMessage): boolean {
 
 function renderShakeDetection(): void {
   shakeDetectionMarkers.replaceChildren();
+  renderRawSensingMarkers();
   if (!settings.shakeDetectionEnabled || !currentShakeDetection) {
     shakeStatus.hidden = true;
     shakeStatusDetail.textContent = '';
     return;
   }
 
-  const areas = highConfidenceAreas(currentShakeDetection);
-  for (const { area, confidence } of areas) {
+  const categories = confidenceAreaCategories(currentShakeDetection);
+  const areas = [...categories.a.map((item) => ({ ...item, grade: 'a' })), ...categories.b.map((item) => ({ ...item, grade: 'b' }))];
+  for (const { area, confidence, grade } of areas) {
     const point = projectCoordinates(area.latitude, area.longitude);
     if (!point) continue;
     const marker = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    marker.setAttribute('class', 'shake-area-marker');
+    marker.setAttribute('class', `shake-area-marker is-grade-${grade}`);
     marker.setAttribute('transform', `translate(${point.x} ${point.y})`);
     marker.setAttribute('role', 'img');
-    marker.setAttribute('aria-label', `${area.name}、信頼度A（${Math.round(confidence * 100)}%）`);
+    marker.setAttribute('aria-label', `${area.name}、信頼度${grade.toUpperCase()}（${Math.round(confidence * 100)}%）`);
 
     const halo = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
     halo.setAttribute('class', 'shake-area-halo');
-    halo.setAttribute('r', '13');
+    halo.setAttribute('r', grade === 'a' ? '13' : '10');
     marker.append(halo);
     const core = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
     core.setAttribute('class', 'shake-area-core');
-    core.setAttribute('r', '5');
+    core.setAttribute('r', grade === 'a' ? '5' : '3.5');
     marker.append(core);
     shakeDetectionMarkers.append(marker);
   }
 
   shakeStatus.hidden = false;
-  shakeStatusDetail.textContent = areas.length > 0
-    ? `${areaSummary(areas)} ${areas.length}地域`
-    : '信頼度Aの地域なし';
-}
-
-function areaSummary(areas: Array<{ area: EpspArea; confidence: number }>): string {
-  const regions = [...new Set(areas.map(({ area }) => area.region))];
-  return regions.slice(0, 2).join('・') + (regions.length > 2 ? 'ほか' : '');
+  shakeStatusDetail.textContent = `解析済み ${currentShakeDetection.count}件 · 信頼度A ${categories.a.length}地域 / B ${categories.b.length}地域`;
 }
 
 function clearShakeDetection(): void {
@@ -806,8 +904,8 @@ function clearShakeDetection(): void {
   currentShakeDetection = null;
   currentShakeReceiveTiming = null;
   lastFocusedShakeEvent = null;
-  if (!mapManualOverride) resetMapView();
   renderShakeDetection();
+  if (!mapManualOverride) resetMapView();
   updateReceiveAgeDisplays();
 }
 
@@ -818,8 +916,8 @@ function scheduleShakeDetectionExpiry(): void {
     currentShakeDetection = null;
     currentShakeReceiveTiming = null;
     lastFocusedShakeEvent = null;
-    if (!mapManualOverride) resetMapView();
     renderShakeDetection();
+    if (!mapManualOverride) resetMapView();
     updateReceiveAgeDisplays();
   }, DETECTION_TIMEOUT_MS);
 }
@@ -863,7 +961,10 @@ function applySettings(): void {
   eewAutoFocusToggle.checked = settings.eewAutoFocusEnabled;
   audioNotifier.setEnabled(settings.audioNotificationsEnabled);
   audioNotifier.setVolume(settings.audioVolume);
-  if (!settings.shakeDetectionEnabled) clearShakeDetection();
+  if (!settings.shakeDetectionEnabled) {
+    clearShakeDetection();
+    clearRawSensingState();
+  }
   else if (!settings.autoFocusEnabled) {
     lastFocusedShakeEvent = null;
     if (!mapManualOverride) resetMapView();
@@ -1630,6 +1731,15 @@ function runTestAction(action: string): void {
     case 'shake-end':
       handleIncomingPayload(testFixtures.createTestShakeEnd(), 'test');
       break;
+    case '561-tokyo':
+      handleIncomingPayload(testFixtures.createTestUserquake(250), 'test');
+      break;
+    case '561-kanagawa':
+      handleIncomingPayload(testFixtures.createTestUserquake(270), 'test');
+      break;
+    case '561-chiba':
+      handleIncomingPayload(testFixtures.createTestUserquake(241), 'test');
+      break;
     case 'eew-1':
       handleIncomingPayload(testFixtures.createTestEewReport1(), 'test');
       break;
@@ -1787,17 +1897,22 @@ function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource =
     if (shakeResult === 'started' && settings.shakeAudioEnabled) notifyAudio('shake');
     if (source === 'test') {
       addTestTimingLog('9611', receiveTiming, '解析更新→受信');
-      addTestLog(`9611 ${shakeResult}: count ${parsedShakeDetection.count}, confidence ${parsedShakeDetection.confidence}`);
+      const categories = confidenceAreaCategories(parsedShakeDetection);
+      addTestLog(`9611 ${shakeResult}: count ${parsedShakeDetection.count}, confidence ${parsedShakeDetection.confidence.toFixed(2)}, A${categories.a.length}/B${categories.b.length}`);
       if (shakeResult === 'updated') addTestLog('audio suppressed: shake update');
     }
     updateReceiveAgeDisplays();
     return;
   }
 
-  // 561 is an individual user sensing message. It is parsed for protocol
-  // compatibility, but never becomes a detection trigger by itself.
-  if (parseUserquake(payload)) {
-    if (source === 'test') addTestLog('561 individual sensing received (display not started)');
+  // 561は受信地域ごとの短時間速報として表示しますが、単独では
+  // 警告・通知音・自動フォーカスのトリガーにしません。
+  const parsedUserquake = parseUserquake(payload);
+  if (parsedUserquake) {
+    const areaName = receiveRawSensing(parsedUserquake.area, parsedUserquake.id ?? '');
+    if (source === 'test') {
+      addTestLog(`561 ${areaName ?? `area ${parsedUserquake.area ?? 'unknown'}`} received; raw regions ${rawSensingAreas.size}`);
+    }
     updateReceiveAgeDisplays();
     return;
   }
@@ -1931,6 +2046,7 @@ window.addEventListener('pagehide', () => {
   eewByEventId.clear();
   earthquakeReceiveTimings.clear();
   earthquakeReceiveTimingOrder.length = 0;
+  clearRawSensingState();
   activeEew = null;
   activeEewEventId = null;
   audioNotifier.dispose();

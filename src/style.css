@@ -194,6 +194,11 @@ button { color: inherit; font: inherit; }
 .shake-area-marker { color: #e2aa61; }
 .shake-area-halo { fill: currentColor; opacity: .18; }
 .shake-area-core { fill: #f1c879; stroke: #211a10; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.shake-area-marker.is-grade-b { color: #8fc4d7; opacity: .78; }
+.shake-area-marker.is-grade-b .shake-area-core { fill: #a6d4e2; stroke: #162631; }
+.raw-sensing-marker { color: #72c9dc; opacity: .9; pointer-events: none; }
+.raw-sensing-ring { fill: #2b91a5; fill-opacity: .13; stroke: currentColor; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.raw-sensing-core { fill: currentColor; stroke: #0b1722; stroke-width: 1; vector-effect: non-scaling-stroke; }
 @keyframes marker-arrival { 0% { opacity: .8; transform: scale(.5); transform-origin: center; } 100% { opacity: 0; transform: scale(2.2); transform-origin: center; } }
 .loading { min-height: 120px; display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 12px; }
 .spinner { width: 14px; height: 14px; flex: 0 0 auto; border: 1px solid #526573; border-top-color: #b4d4e8; border-radius: 50%; animation: spin .8s linear infinite; }
