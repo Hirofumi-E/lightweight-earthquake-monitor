@@ -148,12 +148,14 @@ button { color: inherit; font: inherit; }
 .map-controls button:last-child { font-size: 10px; }
 .map-attribution { position: absolute; right: 15px; bottom: 8px; margin: 0; color: #82909b; font-size: 9px; text-align: right; pointer-events: none; }
 .map-status { position: absolute; left: 15px; bottom: 8px; margin: 0; color: #aab7c1; font-size: 10px; pointer-events: none; }
-.monitor-status { position: absolute; z-index: 1; left: 15px; bottom: 29px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; max-width: min(620px, calc(100% - 30px)); padding: 5px 8px; border: 1px solid #293c4a; border-radius: 4px; background: #0d1923d9; color: #8fa0ac; font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; }
-.monitor-status > strong { color: #b6c8d3; font-weight: 600; }
-.monitor-status span { display: inline-flex; gap: 4px; white-space: nowrap; }
-.monitor-compact-time { display: none !important; }
-.monitor-status b { color: #728492; font-weight: 500; }
-.monitor-status i { color: #acc2cf; font-style: normal; }
+.monitor-status { position: static; z-index: auto; flex: 0 1 auto; min-width: 0; display: flex; align-items: center; justify-content: flex-end; flex-wrap: nowrap; gap: 4px 10px; max-width: none; overflow: hidden; padding: 0; border: 0; border-radius: 0; background: transparent; color: #8796a2; font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; white-space: nowrap; }
+.monitor-status .monitor-item { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
+.monitor-status .monitor-hidden-field { display: none; }
+.monitor-status b { color: #697a87; font-weight: 500; }
+.monitor-status i { color: #9aa9b4; font-style: normal; }
+.monitor-status .monitor-item.is-active i { color: #e8bf72; font-weight: 600; }
+.monitor-status .monitor-item.is-cancelled i { color: #e49c92; font-weight: 600; }
+.monitor-clock { flex: 0 0 auto; color: #a9b6c0; font-size: 9px; font-variant-numeric: tabular-nums; }
 
 .test-panel { position: absolute; z-index: 3; top: 53px; right: 18px; width: min(440px, calc(100% - 36px)); max-height: min(72%, 560px); min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "heading" "controls" "log"; gap: 10px; overflow: auto; padding: 12px 13px 11px; border: 1px solid #81554b; border-radius: 6px; background: #211719f2; box-shadow: 0 14px 32px #0009; }
 .test-panel-heading { grid-area: heading; display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid #5b3d38; }
@@ -216,6 +218,8 @@ button.retry-button { padding: 5px 9px; border: 1px solid #704d45; border-radius
   .test-mode-banner, .sandbox-banner { gap: 5px; margin-right: 8px; padding: 4px 6px; }
   .test-mode-banner span, .sandbox-banner span { display: none; }
   .header-actions { gap: 5px; }
+  .monitor-status { gap: 4px 7px; font-size: 8px; }
+  .monitor-clock { font-size: 8px; }
   .shake-status { max-width: 170px; padding: 4px 6px; font-size: 9px; }
   .shake-status small { display: none; }
   .live-description { display: none; }
@@ -223,6 +227,7 @@ button.retry-button { padding: 5px 9px; border: 1px solid #704d45; border-radius
 }
 
 @media (min-width: 701px) and (max-width: 900px) {
+  .monitor-eew:not(.is-active):not(.is-cancelled) { display: none; }
   .information-panel { grid-template-rows: minmax(126px, auto) minmax(0, 1fr); }
   .latest-panel { min-height: 126px; padding: 8px 13px 6px; }
   .latest-details { flex: 0 0 auto; min-height: 83px; grid-template-columns: 44px minmax(0, 1fr); grid-template-rows: 14px 25px 18px 19px; column-gap: 9px; padding: 5px 0 2px; }
@@ -287,14 +292,13 @@ button.retry-button { padding: 5px 9px; border: 1px solid #704d45; border-radius
   .map-legend { top: 9px; left: 9px; gap: 7px; flex-wrap: wrap; font-size: 8px; }
   .map-legend span { gap: 4px; }
   .map-legend i { width: 7px; height: 7px; }
-  .map-controls { top: auto !important; right: 8px !important; bottom: 44px; left: auto !important; transform: none !important; gap: 3px; }
+  .map-controls { top: auto !important; right: 8px !important; bottom: 10px; left: auto !important; transform: none !important; gap: 3px; }
   .map-controls button { min-width: 26px; height: 24px; padding: 0 5px; }
-  .map-attribution { right: 8px; bottom: 5px; font-size: 7px; }
+  .map-attribution { display: none; }
   .map-status { bottom: 21px; left: 8px; font-size: 8px; }
-  .monitor-status { right: 8px; bottom: 7px; left: 8px; justify-content: flex-start; max-width: none; gap: 3px 7px; padding: 4px 6px; font-size: 9px; }
-  .monitor-status > strong, .monitor-status .monitor-secondary { display: none; }
-  .monitor-compact-time { display: inline-flex !important; }
-  .map-controls { bottom: 42px; }
+  .monitor-status { gap: 3px 5px; font-size: 7px; }
+  .monitor-clock { font-size: 7px; }
+  .monitor-eew:not(.is-active):not(.is-cancelled) { display: none; }
   .information-panel-toggle { left: calc(100% - max(190px, 38%) - 8px); }
   .test-panel { z-index: 7; top: 43px; right: 8px; width: min(440px, calc(100% - 16px)); max-height: calc(100% - 51px); }
 }
@@ -356,12 +360,11 @@ button.retry-button { padding: 5px 9px; border: 1px solid #704d45; border-radius
   .information-panel-toggle { top: 50%; right: 0; left: auto; transform: translateY(-50%); }
   .workspace.is-panel-open .information-panel-toggle { right: calc(min(230px, calc(100vw - 54px)) - 8px); left: auto; }
   .map-legend { display: none; }
-  .map-controls { top: auto !important; right: 7px !important; bottom: 48px; left: auto !important; transform: none !important; gap: 3px; }
+  .map-controls { top: auto !important; right: 7px !important; bottom: 10px; left: auto !important; transform: none !important; gap: 3px; }
   .map-controls button { min-width: 25px; height: 23px; padding: 0 5px; }
   .map-attribution, .map-status { display: none; }
-  .monitor-status { right: 8px; bottom: 7px; left: 8px; justify-content: flex-start; max-width: none; gap: 3px 9px; padding: 5px 7px; font-size: 9px; }
-  .monitor-status > strong, .monitor-status .monitor-secondary { display: none; }
-  .monitor-compact-time { display: inline-flex !important; }
+  .monitor-status .monitor-item { display: none; }
+  .monitor-clock { font-size: 8px; }
   .information-panel-toggle { z-index: 5; width: 16px; height: 42px; padding: 0; border: 1px solid #476173; border-radius: 4px 0 0 4px; background: #12212de8; color: #d9e7ef; font-size: 12px; cursor: pointer; }
   .compact-priority-alert { top: 6px; max-width: calc(100% - 58px); font-size: 9px; }
   .compact-priority-alert:not([hidden]) { display: block; }

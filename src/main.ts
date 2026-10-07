@@ -84,6 +84,14 @@ app.innerHTML = `
           <span id="shake-status-detail" class="shake-status-detail"></span>
           <small>P2P感知解析結果</small>
         </div>
+        <section id="monitor-status" class="monitor-status" aria-label="受信監視">
+          <span class="monitor-item monitor-last-receive"><b>最終受信</b><i id="monitor-last-receive">待機中</i></span>
+          <span class="monitor-item monitor-eew"><b>EEW</b><i id="monitor-latest-eew">待機中</i></span>
+          <span class="monitor-item monitor-shake"><b>揺れ検知</b><i id="monitor-shake">待機中</i></span>
+          <span class="monitor-item monitor-history"><b>履歴同期</b><i id="monitor-history-sync">待機中</i></span>
+          <time class="monitor-clock" id="monitor-current-time" aria-label="現在時刻">—</time>
+          <span class="monitor-hidden-field"><i id="monitor-connection">OFFLINE</i><i id="monitor-latest-quake">待機中</i></span>
+        </section>
         <button id="settings-toggle" class="settings-toggle" type="button" aria-expanded="false" aria-controls="settings-panel" title="動作設定">⚙ 設定</button>
         <div id="connection-status" class="live is-offline" role="status" aria-live="polite" title="WebSocket未接続"><span class="live-dot"></span><span id="connection-label">OFFLINE</span><small id="connection-description" class="live-description">WebSocket未接続</small></div>
       </div>
@@ -208,16 +216,6 @@ app.innerHTML = `
         </div>
         <p class="map-attribution">地図：気象庁「地震情報／都道府県等」のデータを加工して作成</p>
         <p id="map-status" class="map-status">地震情報を取得しています</p>
-        <section id="monitor-status" class="monitor-status" aria-label="受信監視">
-          <strong>受信監視</strong>
-          <span><b>WebSocket</b><i id="monitor-connection">OFFLINE</i></span>
-          <span class="monitor-secondary"><b>${isTestMode ? '最終テスト受信' : '最終WebSocket受信'}</b><i id="monitor-last-receive">待機中</i></span>
-          <span class="monitor-secondary"><b>最新EEW</b><i id="monitor-latest-eew">待機中</i></span>
-          <span class="monitor-secondary"><b>揺れ検出</b><i id="monitor-shake">待機中</i></span>
-          <span class="monitor-secondary"><b>最新地震情報受信</b><i id="monitor-latest-quake">待機中</i></span>
-          <span><b>履歴同期</b><i id="monitor-history-sync">待機中</i></span>
-          <span class="monitor-compact-time"><b>現在時刻</b><i id="monitor-current-time">—</i></span>
-        </section>
         ${isTestMode ? `
         <section id="test-panel" class="test-panel" aria-label="TEST PANEL" hidden>
           <div class="test-panel-heading">
@@ -657,24 +655,14 @@ function updateReceiveAgeDisplays(): void {
   const latest = store.recent[0];
   const latestTiming = latest ? earthquakeReceiveTimings.get(latest.id) : undefined;
   monitorLastReceive.textContent = formatAge(lastWebSocketReceivedAt);
-  monitorLatestEew.textContent = activeEew
-    ? `受信 ${formatAge(activeEew.receiveTiming.browserReceivedAt)}`
-    : eewCancelledMessageVisible ? '取消表示中' : '待機中';
-  if (!settings.shakeDetectionEnabled) monitorShake.textContent = 'OFF';
-  else if (currentShakeDetection && currentShakeReceiveTiming) {
-    const categories = confidenceAreaCategories(currentShakeDetection);
-    monitorShake.textContent = `解析 ${currentShakeDetection.count}件 / A${categories.a.length} B${categories.b.length}地域 / ${formatAge(currentShakeReceiveTiming.browserReceivedAt)}`;
-  } else if (rawSensingAreas.size > 0) {
-    const entries = [...rawSensingAreas.entries()].sort((a, b) => b[1].lastReceivedAt - a[1].lastReceivedAt);
-    const count = entries.reduce((sum, [, area]) => sum + area.count, 0);
-    const details = entries.slice(0, 3).map(([code, area]) => {
-      const name = areaByCode.get(code)?.name ?? code;
-      return `${name} ${area.count}件・${formatAge(area.lastReceivedAt)}`;
-    }).join(' / ');
-    monitorShake.textContent = `感知速報 ${count}件: ${details}${entries.length > 3 ? ` / +${entries.length - 3}地域` : ''}`;
-  } else monitorShake.textContent = '待機中';
+  monitorLatestEew.textContent = activeEew ? '受信中' : eewCancelledMessageVisible ? '取消' : '待機中';
+  monitorLatestEew.closest('.monitor-item')?.classList.toggle('is-active', Boolean(activeEew));
+  monitorLatestEew.closest('.monitor-item')?.classList.toggle('is-cancelled', !activeEew && eewCancelledMessageVisible);
+  const shakeIsActive = settings.shakeDetectionEnabled && Boolean(currentShakeDetection && currentShakeReceiveTiming);
+  monitorShake.textContent = !settings.shakeDetectionEnabled ? 'OFF' : shakeIsActive ? '解析中' : '待機中';
+  monitorShake.closest('.monitor-item')?.classList.toggle('is-active', shakeIsActive);
   monitorLatestQuake.textContent = latestTiming ? formatAge(latestTiming.browserReceivedAt) : '待機中';
-  monitorHistorySync.textContent = lastHistorySyncSucceededAt === null ? '待機中' : `HTTP ${formatAge(lastHistorySyncSucceededAt)}`;
+  monitorHistorySync.textContent = lastHistorySyncSucceededAt === null ? '待機中' : formatAge(lastHistorySyncSucceededAt);
   latestReceivedAge.textContent = latestTiming ? formatAge(latestTiming.browserReceivedAt) : '待機中';
   if (activeEew) eewReceivedAge.textContent = formatAge(activeEew.receiveTiming.browserReceivedAt);
   updateCurrentTime();
