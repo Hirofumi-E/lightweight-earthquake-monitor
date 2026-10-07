@@ -1,8 +1,10 @@
+export type P2PQuakeIssueType = 'ScalePrompt' | 'Destination' | 'ScaleAndDestination' | 'DetailScale' | 'Foreign' | 'Other';
+
 export interface P2PQuake {
   id?: string;
   code: number;
   time: string;
-  issue?: { type?: string; source?: string; time?: string };
+  issue?: { type?: P2PQuakeIssueType; correct?: boolean; source?: string; time?: string };
   earthquake?: {
     time?: string;
     hypocenter?: { name?: string; depth?: number; magnitude?: number; latitude?: number; longitude?: number };
@@ -78,12 +80,17 @@ export interface P2PUserquakeEvaluation {
 }
 
 export interface Earthquake {
+  /** Stable identifier used by the display event, initially the first raw 551 ID. */
   id: string;
+  /** ID of this individual raw 551 announcement; used for transport deduplication. */
+  reportId: string;
   time: string;
-  /** P2P BasicData.time and issue.time are retained for receive timing only. */
+  /** P2P BasicData.time is retained for receive timing only. */
   basicTime: string | null;
   issueTime: string | null;
-  hypocenter: string;
+  issueType: P2PQuakeIssueType;
+  issueCorrect: boolean;
+  hypocenter: string | null;
   maxScale: number | null;
   magnitude: number | null;
   depth: number | null;

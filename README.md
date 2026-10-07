@@ -29,9 +29,9 @@ pnpm run dev
 
 ## 地震情報API
 
-[P2P地震情報 JSON API v2](https://www.p2pquake.net/develop/json_api_v2/) の `GET /history?codes=551&limit=10` で起動時の履歴を取得し、その後は `wss://api.p2pquake.net/v2/ws` から情報コード551（地震情報）をリアルタイム受信します。WebSocket切断時は1秒から最大30秒までの指数バックオフで自動再接続し、接続回復後にHTTPで履歴を一度取得して切断中の情報を補完します。LIVE表示は実際のWebSocket接続状態を示します。
+[P2P地震情報 JSON API v2](https://www.p2pquake.net/develop/json_api_v2/) の `GET /history?codes=551&limit=50` で起動時の履歴を取得し、その後は `wss://api.p2pquake.net/v2/ws` から情報コード551（地震情報）をリアルタイム受信します。個々の551発表IDは重複排除に使い、画面では `earthquake.time` が一致する発表を1つの地震イベントへ統合します。座標や震源名が明らかに異なる情報は分け、発表時刻・訂正状態・情報種別に基づいて有効値を更新します。履歴には最近の地震イベントを最大10件表示します。WebSocket切断時は1秒から最大30秒までの指数バックオフで自動再接続し、接続回復後にHTTPで履歴を一度取得して切断中の情報を補完します。LIVE表示は実際のWebSocket接続状態を示します。
 
-画面の「受信監視」では、WebSocketの接続状態、最後にメッセージを受け取った時刻、最新地震・EEW・揺れ検出の受信経過時間を確認できます。経過時間はブラウザ側の軽量な1秒タイマーで必要な文字列だけ更新します。WebSocketがOPENでメッセージを待っている間も接続を異常扱いせず、最後の受信からの経過時間を情報として表示します。地震情報とEEWには、P2Pデータの `time`（BasicData）を基準にした「P2P→Browser」と、発表時刻を基準にした「発表→Browser」を表示します。551は `issue.time`、556は `issue.time`、9611は `updated_at`（未指定時は `time`）を発表時刻として使います。これは往復時間ではなく、送信元・ブラウザ時計の差を含む参考値です。ブラウザで計算結果が負になる場合は数値を補正せず「時計差あり」と表示します。P2Pの `YYYY/MM/DD HH:mm:ss.SSS` は日本標準時（JST）として明示的に解析します。
+画面の「受信監視」では、WebSocketの接続状態、最後にメッセージを受け取った時刻、最新地震イベント・EEW・揺れ検出の受信経過時間を確認できます。551の表示用受信時刻は、そのイベントに対する最新の有効発表を参照します。経過時間はブラウザ側の軽量な1秒タイマーで必要な文字列だけ更新します。WebSocketがOPENでメッセージを待っている間も接続を異常扱いせず、最後の受信からの経過時間を情報として表示します。地震情報とEEWには、P2Pデータの `time`（BasicData）を基準にした「P2P→Browser」と、発表時刻を基準にした「発表→Browser」を表示します。551は `issue.time`、556は `issue.time`、9611は `updated_at`（未指定時は `time`）を発表時刻として使います。これは往復時間ではなく、送信元・ブラウザ時計の差を含む参考値です。ブラウザで計算結果が負になる場合は数値を補正せず「時計差あり」と表示します。P2Pの `YYYY/MM/DD HH:mm:ss.SSS` は日本標準時（JST）として明示的に解析します。
 
 左パネルの「現在時刻」は、受信イベントとは独立した日本時間（`Asia/Tokyo`）の時計です。既存の1秒更新処理へ統合し、地震情報を受信していない間も更新します。
 
@@ -49,7 +49,7 @@ WebSocketでは、情報コード561（個別の地震感知情報）をプロ�
 
 開発・確認時はURLに `?eewSandbox=1` を付けると、公式サンドボックスWebSocket `wss://api-realtime-sandbox.p2pquake.net/v2/ws`へ接続します。画面には `SANDBOX / 過去の情報を再生中` を表示し、本番モードとは区別します。URLパラメータは保存しません。
 
-実データを使わずに動作確認する場合は、URLに `?testMode=1` を付けます。TEST MODEでは本番HTTP/WebSocketへ接続せず、[`src/testFixtures/fixtures.ts`](src/testFixtures/fixtures.ts) の疑似fixtureだけを本番と同じparse・store・render経路へ渡します。画面のTEST PANELから551、9611、556の各状態、古いEEW報、取消、震源欠損、接続状態、全状態リセットを確認できます。疑似データとイベントログはテストモード内だけで使用し、テストモード状態は保存しません。
+実データを使わずに動作確認する場合は、URLに `?testMode=1` を付けます。TEST MODEでは本番HTTP/WebSocketへ接続せず、[`src/testFixtures/fixtures.ts`](src/testFixtures/fixtures.ts) の疑似fixtureだけを本番と同じparse・store・render経路へ渡します。TEST PANELから551の震度速報・震源情報・詳細・訂正、古い続報、同一ID再送、別イベント、同時刻の遠隔震源、9611、556の各状態を確認できます。疑似データとイベントログはテストモード内だけで使用し、テストモード状態は保存しません。
 
 地域コード・地域名・地方名・緯度・経度は、P2P地震情報公式リポジトリの [`epsp-area.csv`](https://github.com/p2pquake/epsp-specifications/blob/master/epsp-area.csv) から開発時に抽出した [`src/epspAreas.json`](src/epspAreas.json) を使用します。実行時に外部CSVは取得しません。地域位置も日本地図・震源と同じ投影設定を使います。
 
@@ -73,10 +73,11 @@ python3 scripts/generate-japan-map.py /path/to/20190125_AreaInformationPrefectur
 
 - 最新地震情報（最大震度、震源地、発生時刻、マグニチュード、深さ）
 - 最近の地震情報10件を縦リスト表示
-- 地震履歴の選択による震源マーカーの強調
-- 都道府県境界を含むローカルSVG日本地図と、直近10件の震源表示
+- 551発表を地震イベント単位に統合し、履歴選択中の震源だけを地図上で強調
+- 都道府県境界を含むローカルSVG日本地図。通常時はEEW・P2P感知情報を表示
 - SVGのviewBoxを使った地図のドラッグ移動、ホイール・ボタンによるズーム、全国表示への復帰
 - 起動時のHTTP履歴取得とWebSocketによるリアルタイム更新
+- 同一イベントの551続報・訂正の統合、raw発表IDの重複排除、イベント初回追加時のみ地震通知音を再生
 - WebSocketの自動再接続、再接続後のHTTP履歴補完、接続状態表示
 - WebSocket受信時刻・地震/EEW/揺れ検出の受信経過時間と、時計差を考慮した参考遅延表示
 - 日本時間（Asia/Tokyo）の現在時刻表示（1秒更新）

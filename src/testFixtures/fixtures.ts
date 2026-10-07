@@ -42,6 +42,121 @@ export function createTestEarthquake(sequence: number): P2PQuake {
   };
 }
 
+const sameEventOriginTime = p2pTime(Date.now() - 60_000);
+let sameEventIssueBase = Date.now();
+let sameEventLastIssue = sameEventIssueBase;
+
+function nextSameEventIssueTime(offsetMs: number): string {
+  sameEventLastIssue = Math.max(Date.now(), sameEventIssueBase + offsetMs, sameEventLastIssue + 1);
+  return p2pTime(sameEventLastIssue);
+}
+
+function createTestEventReport(
+  id: string,
+  type: NonNullable<P2PQuake['issue']>['type'],
+  issueTime: string,
+  fields: { maxScale: number; name?: string; latitude?: number; longitude?: number; magnitude?: number; depth?: number },
+  correct = false,
+): P2PQuake {
+  return {
+    id,
+    code: 551,
+    time: issueTime,
+    issue: { source: 'TEST FIXTURE', time: issueTime, type, correct },
+    earthquake: {
+      time: sameEventOriginTime,
+      maxScale: fields.maxScale,
+      ...(fields.name || fields.latitude !== undefined || fields.longitude !== undefined || fields.magnitude !== undefined || fields.depth !== undefined
+        ? { hypocenter: {
+          ...(fields.name ? { name: fields.name } : {}),
+          ...(fields.latitude !== undefined ? { latitude: fields.latitude } : {}),
+          ...(fields.longitude !== undefined ? { longitude: fields.longitude } : {}),
+          ...(fields.magnitude !== undefined ? { magnitude: fields.magnitude } : {}),
+          ...(fields.depth !== undefined ? { depth: fields.depth } : {}),
+        } }
+        : {}),
+    },
+  };
+}
+
+export function createTestEventScalePrompt(): P2PQuake {
+  sameEventIssueBase = Date.now();
+  sameEventLastIssue = sameEventIssueBase;
+  return createTestEventReport('test-event-551-scale-prompt', 'ScalePrompt', p2pTime(sameEventIssueBase), { maxScale: 30 });
+}
+
+export function createTestEventDestination(): P2PQuake {
+  return createTestEventReport('test-event-551-destination', 'Destination', nextSameEventIssueTime(2_000), {
+    maxScale: -1,
+    name: 'テスト茨城県北部',
+    latitude: 36.3,
+    longitude: 140.6,
+    magnitude: 4.0,
+    depth: 60,
+  });
+}
+
+export function createTestEventDetailScale(): P2PQuake {
+  return createTestEventReport('test-event-551-detail-scale', 'DetailScale', nextSameEventIssueTime(3_000), {
+    maxScale: 30,
+    name: 'テスト茨城県北部',
+    latitude: 36.3,
+    longitude: 140.6,
+    magnitude: 4.0,
+    depth: 60,
+  });
+}
+
+export function createTestEventCorrectedScale(): P2PQuake {
+  return createTestEventReport('test-event-551-corrected-scale', 'DetailScale', nextSameEventIssueTime(4_000), {
+    maxScale: 20,
+    name: 'テスト茨城県北部',
+    latitude: 36.3,
+    longitude: 140.6,
+    magnitude: 4.0,
+    depth: 60,
+  }, true);
+}
+
+export function createTestEventOldScalePrompt(): P2PQuake {
+  return createTestEventReport('test-event-551-old-scale-prompt', 'ScalePrompt', p2pTime(sameEventIssueBase - 10_000), { maxScale: 10 });
+}
+
+export function createTestEventDuplicateScalePrompt(): P2PQuake {
+  return createTestEventReport('test-event-551-scale-prompt', 'ScalePrompt', p2pTime(sameEventIssueBase), { maxScale: 30 });
+}
+
+export function createTestSeparateEarthquake(): P2PQuake {
+  const time = p2pTime(Date.now());
+  return {
+    id: `test-event-551-separate-${Date.now()}`,
+    code: 551,
+    time,
+    issue: { source: 'TEST FIXTURE', time, type: 'ScaleAndDestination' },
+    earthquake: {
+      time,
+      maxScale: 20,
+      hypocenter: { name: 'テスト熊本県熊本地方', latitude: 32.8, longitude: 130.7, magnitude: 3.9, depth: 10 },
+    },
+  };
+}
+
+/** Same origin timestamp as the Ibaraki event but a clearly distant epicenter. */
+export function createTestSameTimeDifferentSource(): P2PQuake {
+  const issueTime = nextSameEventIssueTime(5_000);
+  return {
+    id: `test-event-551-same-time-distant-${Date.now()}`,
+    code: 551,
+    time: sameEventOriginTime,
+    issue: { source: 'TEST FIXTURE', time: issueTime, type: 'ScaleAndDestination' },
+    earthquake: {
+      time: sameEventOriginTime,
+      maxScale: 20,
+      hypocenter: { name: 'テスト熊本県熊本地方', latitude: 32.8, longitude: 130.7, magnitude: 3.9, depth: 10 },
+    },
+  };
+}
+
 /** A distinct synthetic 551 payload for exercising the HTTP merge path. */
 export function createTestHistoryBackfill(sequence: number): P2PQuake {
   const earthquake = createTestEarthquake(1_000 + Math.max(1, Math.trunc(sequence)));

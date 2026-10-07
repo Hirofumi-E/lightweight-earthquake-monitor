@@ -6,12 +6,14 @@ import type {
   P2PEEW,
   P2PEEWDetection,
   P2PQuake,
+  P2PQuakeIssueType,
   P2PUserquake,
   P2PUserquakeEvaluation,
   ShakeDetection,
 } from './types';
 
-const API_URL = 'https://api.p2pquake.net/v2/history?codes=551&limit=10';
+const API_URL = 'https://api.p2pquake.net/v2/history?codes=551&limit=50';
+const UNRESOLVED_HYPOCENTERS = new Set(['不明', '震源地不明', '震源未判明', '調査中', '震源調査中']);
 
 export async function fetchRecentEarthquakes(signal?: AbortSignal): Promise<Earthquake[]> {
   const response = await fetch(API_URL, { signal, cache: 'no-store', headers: { Accept: 'application/json' } });
@@ -34,16 +36,27 @@ export function parseEarthquake(value: unknown): Earthquake | null {
 
   return {
     id: item.id,
+    reportId: item.id,
     time: eventTime,
     basicTime: typeof item.time === 'string' ? item.time : null,
     issueTime: typeof item.issue?.time === 'string' ? item.issue.time : null,
-    hypocenter: typeof hypocenter?.name === 'string' ? hypocenter.name : '震源地不明',
+    issueType: isP2PQuakeIssueType(item.issue?.type) ? item.issue.type : 'Other',
+    issueCorrect: item.issue?.correct === true,
+    hypocenter: typeof hypocenter?.name === 'string' && hypocenter.name.trim().length > 0 && !isUnresolvedHypocenter(hypocenter.name) ? hypocenter.name.trim() : null,
     maxScale: finiteValue(item.earthquake.maxScale, -1),
     magnitude: finiteValue(hypocenter?.magnitude, -1),
     depth: finiteValue(hypocenter?.depth, -1),
     latitude: finiteValue(hypocenter?.latitude, -200),
     longitude: finiteValue(hypocenter?.longitude, -200),
   };
+}
+
+function isP2PQuakeIssueType(value: unknown): value is P2PQuakeIssueType {
+  return value === 'ScalePrompt' || value === 'Destination' || value === 'ScaleAndDestination' || value === 'DetailScale' || value === 'Foreign' || value === 'Other';
+}
+
+function isUnresolvedHypocenter(value: string): boolean {
+  return UNRESOLVED_HYPOCENTERS.has(value.trim());
 }
 
 /** Parse the pre-evaluation user sensing message without treating it as a quake. */

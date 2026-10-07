@@ -1,7 +1,7 @@
 import './style.css';
 import { fetchRecentEarthquakes, parseEarthquake, parseEew, parseEewDetection, parseShakeDetection, parseUserquake } from './api';
 import { AudioNotifier, type AudioCue, type AudioNotifyResult } from './audioNotifier';
-import { EarthquakeStore } from './earthquakeStore';
+import { EarthquakeStore, type EarthquakeMergeResult } from './earthquakeStore';
 import { COMPACT_MAP_VIEWBOX, MAP_VIEWBOX, projectCoordinates, projectEpicenter } from './mapProjection';
 import areasData from './epspAreas.json';
 import { calculateLatency, formatAge, formatClock, formatLatency, parseP2pTimestamp, type LatencyValue } from './timeUtils';
@@ -224,6 +224,17 @@ app.innerHTML = `
               <span class="test-control-label">地震情報</span>
               <button type="button" data-test-action="quake">通常地震を発生</button>
               <button type="button" data-test-action="history-backfill">履歴補完をシミュレート</button>
+            </div>
+            <div class="test-control-group" aria-label="551同一イベント統合テスト">
+              <span class="test-control-label">551同一地震</span>
+              <button type="button" data-test-action="event-scale-prompt">震度速報</button>
+              <button type="button" data-test-action="event-destination">震源情報</button>
+              <button type="button" data-test-action="event-detail-scale">詳細情報</button>
+              <button type="button" data-test-action="event-corrected-scale">震度訂正</button>
+              <button type="button" data-test-action="event-old-report">古い続報</button>
+              <button type="button" data-test-action="event-duplicate">同一ID再送</button>
+              <button type="button" data-test-action="event-separate">別地震</button>
+              <button type="button" data-test-action="event-same-time-distant">同時刻・別震源</button>
             </div>
             <div class="test-control-group" aria-label="揺れ検出テスト">
               <span class="test-control-label">揺れ検出</span>
@@ -558,8 +569,8 @@ function rememberEarthquakeReceiveTiming(id: string, timing: ReceiveTiming): voi
 
 function rememberHistoryReceiveTimings(earthquakes: readonly Earthquake[], browserReceivedAt: number): void {
   for (const earthquake of earthquakes) {
-    if (earthquakeReceiveTimings.has(earthquake.id)) continue;
-    rememberEarthquakeReceiveTiming(earthquake.id, {
+    if (earthquakeReceiveTimings.has(earthquake.reportId)) continue;
+    rememberEarthquakeReceiveTiming(earthquake.reportId, {
       browserReceivedAt,
       basicTimestamp: earthquake.basicTime,
       sourceTimestamp: earthquake.issueTime,
@@ -570,7 +581,7 @@ function rememberHistoryReceiveTimings(earthquakes: readonly Earthquake[], brows
 }
 
 function renderLatestReceiveMetrics(latest: Earthquake | undefined): void {
-  const timing = latest ? earthquakeReceiveTimings.get(latest.id) : undefined;
+  const timing = latest ? earthquakeReceiveTimings.get(latest.reportId) : undefined;
   latestReceiveMetrics.hidden = !timing;
   if (!timing) return;
   latestReceivedAt.textContent = formatClock(timing.browserReceivedAt);
@@ -648,7 +659,7 @@ function updateReceiveAgeDisplays(): void {
   }
   if (expiredRawArea) renderRawSensingMarkers();
   const latest = store.recent[0];
-  const latestTiming = latest ? earthquakeReceiveTimings.get(latest.id) : undefined;
+  const latestTiming = latest ? earthquakeReceiveTimings.get(latest.reportId) : undefined;
   monitorLastReceive.textContent = formatAge(lastWebSocketReceivedAt);
   monitorLatestEew.textContent = activeEew ? '受信中' : eewCancelledMessageVisible ? '取消' : '待機中';
   monitorLatestEew.closest('.monitor-item')?.classList.toggle('is-active', Boolean(activeEew));
@@ -1397,7 +1408,7 @@ function renderLatest(latest: Earthquake | undefined): void {
   latestLoading.hidden = true;
   latestDetails.hidden = false;
   latestScale.textContent = scaleLabel(latest.maxScale);
-  latestPlace.textContent = latest.hypocenter;
+  latestPlace.textContent = latest.hypocenter ?? '震源未判明';
   latestDate.textContent = formatTime(latest.time);
   latestMagnitude.textContent = `M ${latest.magnitude?.toFixed(1) ?? '—'}`;
   latestDepth.textContent = latest.depth === null ? '深さ —' : latest.depth === 0 ? 'ごく浅い' : `深さ ${latest.depth} km`;
@@ -1415,7 +1426,7 @@ function renderList(earthquakes: readonly Earthquake[]): void {
   list.innerHTML = earthquakes.map((quake, index) => `
     <button class="quake-row ${index === 0 ? 'is-latest' : ''} ${selectedEarthquakeId === quake.id ? 'is-selected' : ''}" type="button" data-earthquake-id="${escapeHtml(quake.id)}" aria-pressed="${selectedEarthquakeId === quake.id}">
       <time datetime="${escapeHtml(quake.time)}">${formatTime(quake.time)}</time>
-      <strong class="quake-place">${escapeHtml(quake.hypocenter)}</strong>
+      <strong class="quake-place">${escapeHtml(quake.hypocenter ?? '震源未判明')}</strong>
       <span class="row-scale">震度 <b>${scaleLabel(quake.maxScale)}</b></span>
       <span class="row-measure">M ${quake.magnitude?.toFixed(1) ?? '—'}<small>${quake.depth === null ? '深さ —' : quake.depth === 0 ? 'ごく浅い' : `深さ ${quake.depth} km`}</small></span>
     </button>`).join('');
@@ -1487,13 +1498,13 @@ function renderAll(animateLatest = false): void {
   document.querySelector('#refresh-error')?.remove();
 }
 
-function mergeEarthquakeHistory(earthquakes: readonly Earthquake[], browserReceivedAt: number, animateLatest = false): boolean {
+function mergeEarthquakeHistory(earthquakes: readonly Earthquake[], browserReceivedAt: number, animateLatest = false): EarthquakeMergeResult {
   rememberHistoryReceiveTimings(earthquakes, browserReceivedAt);
-  const changed = store.merge(earthquakes);
-  if (changed || !hasLoaded) renderAll(animateLatest);
+  const result = store.merge(earthquakes);
+  if (result.changed || !hasLoaded) renderAll(animateLatest);
   hasLoaded = true;
   updateReceiveAgeDisplays();
-  return changed;
+  return result;
 }
 
 function setConnectionState(state: 'live' | 'reconnecting' | 'offline'): void {
@@ -1757,13 +1768,40 @@ function runTestAction(action: string): void {
       testBackfillSequence += 1;
       const earthquake = parseEarthquake(testFixtures.createTestHistoryBackfill(testBackfillSequence));
       if (earthquake) {
-        const changed = mergeEarthquakeHistory([earthquake], Date.now());
-        addTestLog(changed
-          ? `HTTP history fixture merged: ${earthquake.id}`
-          : `HTTP history fixture duplicate: ${earthquake.id}`);
+        const result = mergeEarthquakeHistory([earthquake], Date.now());
+        addTestLog(result.changed
+          ? `HTTP history fixture merged: ${earthquake.reportId}`
+          : `HTTP history fixture duplicate: ${earthquake.reportId}`);
       }
       break;
     }
+    case 'event-scale-prompt':
+      handleIncomingPayload(testFixtures.createTestEventScalePrompt(), 'test');
+      break;
+    case 'event-destination':
+      handleIncomingPayload(testFixtures.createTestEventDestination(), 'test');
+      break;
+    case 'event-detail-scale':
+      handleIncomingPayload(testFixtures.createTestEventDetailScale(), 'test');
+      break;
+    case 'event-corrected-scale':
+      handleIncomingPayload(testFixtures.createTestEventCorrectedScale(), 'test');
+      break;
+    case 'event-old-report':
+      handleIncomingPayload(testFixtures.createTestEventOldScalePrompt(), 'test');
+      break;
+    case 'event-duplicate':
+      handleIncomingPayload(testFixtures.createTestEventDuplicateScalePrompt(), 'test');
+      break;
+    case 'event-separate':
+      handleIncomingPayload(testFixtures.createTestSeparateEarthquake(), 'test');
+      break;
+    case 'event-same-time-distant':
+      // First give the existing event a concrete epicenter, then inject the
+      // same origin time with a far-away source to exercise the split guard.
+      handleIncomingPayload(testFixtures.createTestEventDestination(), 'test');
+      handleIncomingPayload(testFixtures.createTestSameTimeDifferentSource(), 'test');
+      break;
     case 'shake-start':
       handleIncomingPayload(testFixtures.createTestShakeStart(), 'test');
       break;
@@ -1980,17 +2018,25 @@ function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource =
   const earthquake = parseEarthquake(payload);
   if (!earthquake) return;
   const receiveTiming = createReceiveTiming(payload, browserReceivedAt, payloadString(payload, 'issue', 'time'));
-  if (!mergeEarthquakeHistory([earthquake], browserReceivedAt, true)) {
+  rememberEarthquakeReceiveTiming(earthquake.reportId, receiveTiming);
+  const mergeResult = mergeEarthquakeHistory([earthquake], browserReceivedAt, true);
+  if (!mergeResult.changed) {
     if (source === 'test') {
-      addTestLog(`551 duplicate ignored: ${earthquake.id}`);
-      addTestLog('audio suppressed: duplicate');
+      const duplicate = mergeResult.duplicateReportIds.includes(earthquake.reportId);
+      addTestLog(duplicate
+        ? `551 duplicate report ignored: ${earthquake.reportId}`
+        : `551 older/no-change report ignored: ${earthquake.reportId}`);
+      addTestLog('audio suppressed: same event or duplicate');
     }
     return;
   }
-  if (settings.earthquakeAudioEnabled) notifyAudio('earthquake');
+  if (mergeResult.newEventIds.length > 0 && settings.earthquakeAudioEnabled) notifyAudio('earthquake');
   if (source === 'test') {
     addTestTimingLog('551', receiveTiming);
-    addTestLog(`551 earthquake ${earthquake.id}`);
+    addTestLog(mergeResult.newEventIds.length > 0
+      ? `551 new earthquake event ${mergeResult.newEventIds[0]}`
+      : `551 event updated ${mergeResult.updatedEventIds[0] ?? earthquake.time}`);
+    if (mergeResult.newEventIds.length === 0) addTestLog('audio suppressed: event continuation');
   }
   updateReceiveAgeDisplays();
 }
