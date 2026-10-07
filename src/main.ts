@@ -142,6 +142,8 @@ app.innerHTML = `
       </section>
     </header>
     <main class="workspace">
+      <button id="information-panel-toggle" class="information-panel-toggle" type="button" aria-expanded="true" aria-controls="information-panel" aria-label="地震情報パネルを閉じる" title="地震情報パネルを閉じる">&gt;</button>
+      <div id="compact-priority-alert" class="compact-priority-alert" role="status" aria-live="assertive" hidden></div>
       <aside class="information-panel" aria-label="最新地震情報と地震履歴">
         <section id="latest-card" class="latest-panel" aria-label="最新地震情報と緊急地震速報" aria-live="polite">
           <div class="panel-section-heading"><h2 id="latest-heading">最新の地震</h2><span class="latest-indicator"><i></i><span id="latest-indicator-label">最新</span></span></div>
@@ -214,6 +216,7 @@ app.innerHTML = `
           <span class="monitor-secondary"><b>揺れ検出</b><i id="monitor-shake">待機中</i></span>
           <span class="monitor-secondary"><b>最新地震情報受信</b><i id="monitor-latest-quake">待機中</i></span>
           <span><b>履歴同期</b><i id="monitor-history-sync">待機中</i></span>
+          <span class="monitor-compact-time"><b>現在時刻</b><i id="monitor-current-time">—</i></span>
         </section>
         ${isTestMode ? `
         <section id="test-panel" class="test-panel" aria-label="TEST PANEL" hidden>
@@ -268,6 +271,7 @@ app.innerHTML = `
 const latestCard = document.querySelector<HTMLElement>('#latest-card')!;
 const list = document.querySelector<HTMLDivElement>('#earthquake-list')!;
 const currentTime = document.querySelector<HTMLTimeElement>('#current-time')!;
+const monitorCurrentTime = document.querySelector<HTMLElement>('#monitor-current-time')!;
 const eventCount = document.querySelector<HTMLSpanElement>('#event-count')!;
 const latestLoading = document.querySelector<HTMLDivElement>('#latest-loading')!;
 const latestDetails = document.querySelector<HTMLElement>('#latest-details')!;
@@ -321,6 +325,9 @@ const monitorLatestEew = document.querySelector<HTMLElement>('#monitor-latest-ee
 const monitorShake = document.querySelector<HTMLElement>('#monitor-shake')!;
 const monitorLatestQuake = document.querySelector<HTMLElement>('#monitor-latest-quake')!;
 const monitorHistorySync = document.querySelector<HTMLElement>('#monitor-history-sync')!;
+const compactPriorityAlert = document.querySelector<HTMLDivElement>('#compact-priority-alert')!;
+const informationPanelToggle = document.querySelector<HTMLButtonElement>('#information-panel-toggle')!;
+const workspace = document.querySelector<HTMLElement>('.workspace')!;
 const settingsToggle = document.querySelector<HTMLButtonElement>('#settings-toggle')!;
 const settingsPanel = document.querySelector<HTMLElement>('#settings-panel')!;
 const shakeDetectionToggle = document.querySelector<HTMLInputElement>('#shake-detection-toggle')!;
@@ -598,8 +605,42 @@ const tokyoClockFormatter = new Intl.DateTimeFormat('ja-JP', {
 
 function updateCurrentTime(): void {
   const now = new Date();
-  currentTime.textContent = tokyoClockFormatter.format(now);
+  const clockText = tokyoClockFormatter.format(now);
+  currentTime.textContent = clockText;
+  monitorCurrentTime.textContent = clockText;
   currentTime.dateTime = now.toISOString();
+}
+
+function renderCompactPriorityAlert(): void {
+  if (!eewDetails.hidden) {
+    compactPriorityAlert.textContent = `EEW ${eewReport.textContent} · ${eewPlaceName.textContent} · 最大予測震度 ${eewScale.textContent}`;
+    compactPriorityAlert.className = 'compact-priority-alert is-eew';
+    compactPriorityAlert.hidden = false;
+  } else if (!eewCancelled.hidden) {
+    compactPriorityAlert.textContent = '緊急地震速報は取り消されました';
+    compactPriorityAlert.className = 'compact-priority-alert is-cancelled';
+    compactPriorityAlert.hidden = false;
+  } else if (!shakeStatus.hidden) {
+    compactPriorityAlert.textContent = `${shakeStatus.querySelector('.shake-status-label')?.textContent ?? '揺れを検出しています'} · ${shakeStatusDetail.textContent}`;
+    compactPriorityAlert.className = 'compact-priority-alert is-shake';
+    compactPriorityAlert.hidden = false;
+  } else {
+    compactPriorityAlert.hidden = true;
+    compactPriorityAlert.textContent = '';
+  }
+}
+
+let panelPreference: boolean | null = null;
+const compactPanelMedia = window.matchMedia('(max-width: 450px)');
+
+function syncInformationPanelToggle(): void {
+  const isOpen = panelPreference ?? !compactPanelMedia.matches;
+  workspace.classList.toggle('is-panel-open', isOpen);
+  workspace.classList.toggle('is-panel-closed', !isOpen);
+  informationPanelToggle.setAttribute('aria-expanded', String(isOpen));
+  informationPanelToggle.setAttribute('aria-label', isOpen ? '地震情報パネルを閉じる' : '地震情報パネルを開く');
+  informationPanelToggle.title = isOpen ? '地震情報パネルを閉じる' : '地震情報パネルを開く';
+  informationPanelToggle.textContent = isOpen ? '<' : '>';
 }
 
 function updateReceiveAgeDisplays(): void {
@@ -877,6 +918,7 @@ function renderShakeDetection(): void {
   if (!settings.shakeDetectionEnabled || !currentShakeDetection) {
     shakeStatus.hidden = true;
     shakeStatusDetail.textContent = '';
+    renderCompactPriorityAlert();
     return;
   }
 
@@ -904,6 +946,7 @@ function renderShakeDetection(): void {
 
   shakeStatus.hidden = false;
   shakeStatusDetail.textContent = `解析済み ${currentShakeDetection.count}件 · 信頼度A ${categories.a.length}地域 / B ${categories.b.length}地域`;
+  renderCompactPriorityAlert();
 }
 
 function clearShakeDetection(): void {
@@ -1174,6 +1217,7 @@ function renderEewPanel(eew: StoredEew): void {
     ? `府県集約予測：${forecasts.slice(0, 5).map((forecast) => `${forecast.prefecture} ${scaleLabel(forecast.scaleTo)}`).join('、')}${forecasts.length > 5 ? ' ほか' : ''}`
     : '';
   renderEewReceiveMetrics(eew.receiveTiming);
+  renderCompactPriorityAlert();
 }
 
 function renderEewCancelled(): void {
@@ -1186,6 +1230,7 @@ function renderEewCancelled(): void {
   eewCancelled.hidden = false;
   latestReceiveMetrics.hidden = true;
   renderEewReceiveMetrics(null);
+  renderCompactPriorityAlert();
 }
 
 function compareEewSerial(left: string, right: string): number {
@@ -1345,6 +1390,7 @@ function renderLatest(latest: Earthquake | undefined): void {
   latestIndicatorLabel.textContent = '最新';
   eewDetails.hidden = true;
   eewCancelled.hidden = true;
+  renderCompactPriorityAlert();
   renderEewReceiveMetrics(null);
   if (!latest) {
     latestDetails.hidden = true;
@@ -1582,6 +1628,13 @@ function handleMapPointerMove(event: PointerEvent): void {
 mapZoomIn.addEventListener('click', () => zoomMapByFactor(1 / MAP_ZOOM_FACTOR), { signal: lifecycle.signal });
 mapZoomOut.addEventListener('click', () => zoomMapByFactor(MAP_ZOOM_FACTOR), { signal: lifecycle.signal });
 mapReset.addEventListener('click', resetMapToNation, { signal: lifecycle.signal });
+informationPanelToggle.addEventListener('click', () => {
+  panelPreference = informationPanelToggle.getAttribute('aria-expanded') !== 'true';
+  syncInformationPanelToggle();
+}, { signal: lifecycle.signal });
+compactPanelMedia.addEventListener('change', () => {
+  if (panelPreference === null) syncInformationPanelToggle();
+}, { signal: lifecycle.signal });
 japanMap.addEventListener('pointerdown', handleMapPointerDown, { signal: lifecycle.signal });
 japanMap.addEventListener('pointermove', handleMapPointerMove, { signal: lifecycle.signal });
 japanMap.addEventListener('pointerup', finishMapDrag, { signal: lifecycle.signal });
@@ -1610,6 +1663,7 @@ function requestTestAudio(cue: AudioCue): void {
 }
 
 applySettings();
+syncInformationPanelToggle();
 
 settingsToggle.addEventListener('click', () => {
   const shouldOpen = settingsPanel.hidden;
