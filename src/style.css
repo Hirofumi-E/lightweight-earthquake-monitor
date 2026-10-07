@@ -136,23 +136,20 @@ button { color: inherit; font: inherit; }
 .eew-prefecture { pointer-events: none; }
 .earthquake-markers { overflow: visible; }
 .shake-detection-markers { overflow: visible; pointer-events: none; }
-.map-legend { position: absolute; z-index: 1; top: 16px; left: 18px; display: flex; gap: 15px; color: #bdc9d2; font-size: 11px; pointer-events: none; }
-.map-legend span { display: inline-flex; align-items: center; gap: 7px; }
-.map-legend i { width: 9px; height: 9px; display: inline-block; border-radius: 50%; background: #e9b96f; }
-.map-legend .legend-eew { background: #f3c36e; box-shadow: 0 0 0 3px #f3c36e33; }
-.map-legend .legend-detection { background: #e2aa61; box-shadow: 0 0 0 3px #e2aa6133; }
-.map-legend .legend-past { background: #82b5d7; opacity: .75; }
 .map-controls { position: absolute; z-index: 5; top: auto; right: 12px; bottom: 42px; left: auto; display: flex; gap: 4px; transform: none; pointer-events: auto; }
 .map-controls button { min-width: 29px; height: 27px; padding: 0 7px; border: 1px solid #3c596b; border-radius: 3px; background: #12212dcc; color: #d3e1ea; font-size: 14px; line-height: 1; cursor: pointer; }
 .map-controls button:hover, .map-controls button:focus-visible { border-color: #82abc3; background: #1b3444ee; color: #f1f7fb; outline: none; }
 .map-controls button:last-child { font-size: 10px; }
 .map-attribution { position: absolute; right: 15px; bottom: 8px; margin: 0; color: #82909b; font-size: 9px; text-align: right; pointer-events: none; }
-.map-status { position: absolute; left: 15px; bottom: 8px; margin: 0; color: #aab7c1; font-size: 10px; pointer-events: none; }
 .monitor-status { position: static; z-index: auto; flex: 0 1 auto; min-width: 0; display: flex; align-items: center; justify-content: flex-end; flex-wrap: nowrap; gap: 4px 10px; max-width: none; overflow: hidden; padding: 0; border: 0; border-radius: 0; background: transparent; color: #8796a2; font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; white-space: nowrap; }
 .monitor-status .monitor-item { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
 .monitor-status .monitor-hidden-field { display: none; }
 .monitor-status b { color: #697a87; font-weight: 500; }
 .monitor-status i { color: #9aa9b4; font-style: normal; }
+.monitor-status .monitor-eew b::before, .monitor-status .monitor-shake b::before { content: ''; display: inline-block; width: 5px; height: 5px; margin: 0 4px 1px 0; border-radius: 50%; background: #64727d; }
+.monitor-status .monitor-eew.is-active b::before { background: #e8bf72; box-shadow: 0 0 0 2px #e8bf7226; }
+.monitor-status .monitor-eew.is-cancelled b::before { background: #e49c92; }
+.monitor-status .monitor-shake.is-active b::before { background: #72c9dc; box-shadow: 0 0 0 2px #72c9dc26; }
 .monitor-status .monitor-item.is-active i { color: #e8bf72; font-weight: 600; }
 .monitor-status .monitor-item.is-cancelled i { color: #e49c92; font-weight: 600; }
 .monitor-clock { flex: 0 0 auto; color: #a9b6c0; font-size: 9px; font-variant-numeric: tabular-nums; }
@@ -180,7 +177,6 @@ button { color: inherit; font: inherit; }
 .epicenter-marker.intensity-moderate { color: #d9b265; }
 .epicenter-marker.intensity-strong { color: #e7955b; }
 .epicenter-marker.intensity-severe { color: #df7774; }
-.epicenter-marker.is-latest { color: #f0bd71; }
 .epicenter-marker.is-selected { color: #ecf5fc; }
 .marker-halo { fill: currentColor; opacity: .17; }
 .marker-ring { fill: none; stroke: currentColor; stroke-width: 1.3; vector-effect: non-scaling-stroke; }
@@ -289,13 +285,9 @@ button.retry-button { padding: 5px 9px; border: 1px solid #704d45; border-radius
   .quake-row time, .row-measure { font-size: 8px; }
   .quake-place { font-size: 9px; }
   .row-measure small { margin-top: 1px; font-size: 7px; }
-  .map-legend { top: 9px; left: 9px; gap: 7px; flex-wrap: wrap; font-size: 8px; }
-  .map-legend span { gap: 4px; }
-  .map-legend i { width: 7px; height: 7px; }
   .map-controls { top: auto !important; right: 8px !important; bottom: 10px; left: auto !important; transform: none !important; gap: 3px; }
   .map-controls button { min-width: 26px; height: 24px; padding: 0 5px; }
   .map-attribution { display: none; }
-  .map-status { bottom: 21px; left: 8px; font-size: 8px; }
   .monitor-status { gap: 3px 5px; font-size: 7px; }
   .monitor-clock { font-size: 7px; }
   .monitor-eew:not(.is-active):not(.is-cancelled) { display: none; }
@@ -359,10 +351,9 @@ button.retry-button { padding: 5px 9px; border: 1px solid #704d45; border-radius
   .row-measure small { margin-top: 1px; font-size: 6px; }
   .information-panel-toggle { top: 50%; right: 0; left: auto; transform: translateY(-50%); }
   .workspace.is-panel-open .information-panel-toggle { right: calc(min(230px, calc(100vw - 54px)) - 8px); left: auto; }
-  .map-legend { display: none; }
   .map-controls { top: auto !important; right: 7px !important; bottom: 10px; left: auto !important; transform: none !important; gap: 3px; }
   .map-controls button { min-width: 25px; height: 23px; padding: 0 5px; }
-  .map-attribution, .map-status { display: none; }
+  .map-attribution { display: none; }
   .monitor-status .monitor-item { display: none; }
   .monitor-clock { font-size: 8px; }
   .information-panel-toggle { z-index: 5; width: 16px; height: 42px; padding: 0; border: 1px solid #476173; border-radius: 4px 0 0 4px; background: #12212de8; color: #d9e7ef; font-size: 12px; cursor: pointer; }

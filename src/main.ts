@@ -197,15 +197,13 @@ app.innerHTML = `
         </section>
       </aside>
       <section class="map-panel" aria-label="日本地図と震源">
-        <div class="map-legend" aria-label="地図の凡例"><span><i class="legend-eew"></i>EEW予測</span><span><i class="legend-current"></i>最新の震源</span><span><i class="legend-detection"></i>揺れ検出地域</span><span><i class="legend-past"></i>過去の震源</span></div>
         <svg id="japan-map" class="japan-map" viewBox="0 0 800 800" role="img" aria-label="日本の都道府県地図と最近の震源位置">
           <image href="${japanMapUrl}" width="800" height="800" />
           <g id="eew-prefecture-overlays" class="eew-prefecture-overlays" aria-label="EEW予測震度" />
           <g id="earthquake-markers" class="earthquake-markers" aria-label="最近の震源">
-            <g id="historical-earthquake-markers" aria-label="過去の震源" />
             <g id="raw-shake-markers" aria-label="P2P感知速報地域" />
             <g id="shake-detection-markers" class="shake-detection-markers" aria-label="揺れ検出地域" />
-            <g id="latest-earthquake-marker" aria-label="最新の震源" />
+            <g id="selected-earthquake-marker" aria-label="選択した地震の震源" />
           </g>
           <g id="eew-marker" class="eew-marker" aria-label="EEW震源" />
         </svg>
@@ -215,7 +213,6 @@ app.innerHTML = `
           <button id="map-reset" type="button" aria-label="日本全国を表示" title="全国">全国</button>
         </div>
         <p class="map-attribution">地図：気象庁「地震情報／都道府県等」のデータを加工して作成</p>
-        <p id="map-status" class="map-status">地震情報を取得しています</p>
         ${isTestMode ? `
         <section id="test-panel" class="test-panel" aria-label="TEST PANEL" hidden>
           <div class="test-panel-heading">
@@ -305,10 +302,8 @@ const japanMap = document.querySelector<SVGSVGElement>('#japan-map')!;
 const eewPrefectureOverlays = document.querySelector<SVGGElement>('#eew-prefecture-overlays')!;
 const shakeDetectionMarkers = document.querySelector<SVGGElement>('#shake-detection-markers')!;
 const rawShakeMarkers = document.querySelector<SVGGElement>('#raw-shake-markers')!;
-const historicalEarthquakeMarkers = document.querySelector<SVGGElement>('#historical-earthquake-markers')!;
-const latestEarthquakeMarker = document.querySelector<SVGGElement>('#latest-earthquake-marker')!;
+const selectedEarthquakeMarker = document.querySelector<SVGGElement>('#selected-earthquake-marker')!;
 const eewMarker = document.querySelector<SVGGElement>('#eew-marker')!;
-const mapStatus = document.querySelector<HTMLParagraphElement>('#map-status')!;
 const mapZoomIn = document.querySelector<HTMLButtonElement>('#map-zoom-in')!;
 const mapZoomOut = document.querySelector<HTMLButtonElement>('#map-zoom-out')!;
 const mapReset = document.querySelector<HTMLButtonElement>('#map-reset')!;
@@ -796,7 +791,10 @@ function resetMapToNation(): void {
   if (activeEewEventId) suppressedEewEventId = activeEewEventId;
   if (currentShakeDetection) suppressedShakeEventId = currentShakeDetection.startedAt;
   mapManualOverride = false;
+  selectedEarthquakeId = null;
   resetMapView();
+  renderMarkers(store.recent);
+  renderList(store.recent);
 }
 
 function highConfidenceAreas(detection: ShakeDetection | null): Array<{ area: EpspArea; confidence: number }> {
@@ -1155,12 +1153,10 @@ function renderEewMarker(eew: EewMessage | null): void {
 function updateEewMapStatus(eew: EewMessage): void {
   const hypocenter = eew.earthquake?.hypocenter;
   if (!hypocenter) {
-    mapStatus.textContent = `${eew.test ? 'TEST ' : ''}EEW：震源座標なし`;
     japanMap.setAttribute('aria-label', `${eew.test ? '試験' : '緊急地震速報'}を表示。震源座標なし`);
     return;
   }
   const place = hypocenter.reduceName ?? hypocenter.name ?? '震源情報不明';
-  mapStatus.textContent = `${eew.test ? 'TEST ' : ''}EEW：${place}`;
   japanMap.setAttribute('aria-label', `${eew.test ? '試験' : '緊急地震速報'}の震源を表示。${place}`);
 }
 
@@ -1395,7 +1391,6 @@ function renderLatest(latest: Earthquake | undefined): void {
     latestReceiveMetrics.hidden = true;
     latestLoading.hidden = false;
     latestLoading.innerHTML = '<div class="empty-state">表示できる地震情報はありません</div>';
-    mapStatus.textContent = '表示できる地震情報はありません';
     return;
   }
 
@@ -1434,92 +1429,53 @@ function intensityClass(scale: number | null): string {
   return 'intensity-light';
 }
 
-function renderMarkers(earthquakes: readonly Earthquake[], animateLatest = false): void {
+function renderMarkers(earthquakes: readonly Earthquake[], _animateLatest = false): void {
   if (selectedEarthquakeId && !earthquakes.some((quake) => quake.id === selectedEarthquakeId)) selectedEarthquakeId = null;
-  const latest = earthquakes[0];
   const keepEewPriority = (): void => {
     if (activeEew) updateEewMapStatus(activeEew);
   };
-  const historicalMarkerNodes: SVGGElement[] = [];
-  const latestMarkerNodes: SVGGElement[] = [];
-  let mappableCount = 0;
-  const drawable = [...earthquakes].reverse();
-
-  for (let index = 0; index < drawable.length; index += 1) {
-    const quake = drawable[index];
-    const point = projectEpicenter(quake);
-    if (!point) continue;
-    mappableCount += 1;
-    const isLatest = quake.id === latest?.id;
-    const isSelected = quake.id === (selectedEarthquakeId ?? latest?.id);
-    const marker = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    const originalIndex = earthquakes.findIndex((item) => item.id === quake.id);
-    const classes = ['epicenter-marker', intensityClass(quake.maxScale)];
-    if (isLatest) classes.push('is-latest');
-    if (isSelected) classes.push('is-selected');
-    if (animateLatest && isLatest) classes.push('is-new');
-    marker.setAttribute('class', classes.join(' '));
-    marker.setAttribute('transform', `translate(${point.x} ${point.y})`);
-    marker.setAttribute('role', 'img');
-    marker.setAttribute('aria-label', `${quake.hypocenter}、震度${scaleLabel(quake.maxScale)}${isLatest ? '、最新' : ''}`);
-    marker.style.opacity = isLatest || isSelected ? '1' : String(Math.max(0.3, 0.82 - originalIndex * 0.055));
-
-    const radius = (isLatest ? 5 : 3.2) + Math.min(7, (quake.maxScale ?? 10) / 10) * 0.35;
-    const halo = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    halo.setAttribute('class', 'marker-halo');
-    halo.setAttribute('r', String(radius + (isLatest || isSelected ? 6 : 2)));
-    marker.append(halo);
-
-    if (isLatest || isSelected) {
-      const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      ring.setAttribute('class', 'marker-ring');
-      ring.setAttribute('r', String(radius + 3));
-      marker.append(ring);
-    }
-
-    const core = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    core.setAttribute('class', 'marker-core');
-    core.setAttribute('r', String(radius));
-    marker.append(core);
-
-    if (isLatest || isSelected) {
-      const center = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      center.setAttribute('class', 'marker-center');
-      center.setAttribute('r', '1.7');
-      marker.append(center);
-    }
-
-    if (animateLatest && isLatest) {
-      const pulse = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      pulse.setAttribute('class', 'marker-pulse');
-      pulse.setAttribute('r', String(radius + 7));
-      marker.prepend(pulse);
-    }
-    if (isLatest) latestMarkerNodes.push(marker);
-    else historicalMarkerNodes.push(marker);
-  }
-
-  historicalEarthquakeMarkers.replaceChildren(...historicalMarkerNodes);
-  latestEarthquakeMarker.replaceChildren(...latestMarkerNodes);
-  if (!latest) {
-    mapStatus.textContent = '表示できる地震情報はありません';
-    japanMap.setAttribute('aria-label', '日本地図。表示できる地震情報はありません');
+  selectedEarthquakeMarker.replaceChildren();
+  const selected = earthquakes.find((quake) => quake.id === selectedEarthquakeId);
+  if (!selected) {
+    japanMap.setAttribute('aria-label', '日本地図。履歴から地震を選択すると震源位置を表示します');
     keepEewPriority();
     return;
   }
 
-  const selected = earthquakes.find((quake) => quake.id === selectedEarthquakeId) ?? latest;
   const selectedPoint = projectEpicenter(selected);
   if (!selectedPoint) {
     const hasCoordinates = selected.latitude !== null && selected.longitude !== null;
-    mapStatus.textContent = hasCoordinates ? '震源は地図の表示範囲外です' : '震源座標を取得できません';
-    japanMap.setAttribute('aria-label', '日本地図。震源位置を表示できません');
+    japanMap.setAttribute('aria-label', hasCoordinates
+      ? `日本地図。選択中の${selected.hypocenter}は表示範囲外です`
+      : `日本地図。選択中の${selected.hypocenter}の震源座標を取得できません`);
     keepEewPriority();
     return;
   }
-  const prefix = selected.id === latest.id ? '最新' : '選択中';
-  mapStatus.textContent = `${prefix}：${selected.hypocenter} / 地図上 ${mappableCount}件`;
-  japanMap.setAttribute('aria-label', `日本地図。最近の震源${mappableCount}件を表示。${selected.hypocenter}を強調中`);
+  const marker = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  marker.setAttribute('class', `epicenter-marker ${intensityClass(selected.maxScale)} is-selected`);
+  marker.setAttribute('transform', `translate(${selectedPoint.x} ${selectedPoint.y})`);
+  marker.setAttribute('role', 'img');
+  marker.setAttribute('aria-label', `${selected.hypocenter}、震度${scaleLabel(selected.maxScale)}、選択中`);
+
+  const radius = 5 + Math.min(7, (selected.maxScale ?? 10) / 10) * 0.35;
+  const halo = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  halo.setAttribute('class', 'marker-halo');
+  halo.setAttribute('r', String(radius + 6));
+  marker.append(halo);
+  const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  ring.setAttribute('class', 'marker-ring');
+  ring.setAttribute('r', String(radius + 3));
+  marker.append(ring);
+  const core = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  core.setAttribute('class', 'marker-core');
+  core.setAttribute('r', String(radius));
+  marker.append(core);
+  const center = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  center.setAttribute('class', 'marker-center');
+  center.setAttribute('r', '1.7');
+  marker.append(center);
+  selectedEarthquakeMarker.append(marker);
+  japanMap.setAttribute('aria-label', `日本地図。${selected.hypocenter}の震源を選択表示中`);
   keepEewPriority();
 }
 
@@ -1922,7 +1878,6 @@ async function loadHistory(reason: HistorySyncReason): Promise<void> {
         if (!hasLoaded && reason !== 'periodic') {
           latestLoading.hidden = false;
           latestLoading.innerHTML = `<div class="error-state"><strong>情報を取得できませんでした</strong><span>${escapeHtml(message)}</span><button id="retry-button" class="retry-button" type="button">再試行</button></div>`;
-          mapStatus.textContent = '地震情報を取得できませんでした';
           list.innerHTML = '<div class="empty-state">通信が回復すると地震情報を表示します</div>';
           document.querySelector<HTMLButtonElement>('#retry-button')?.addEventListener('click', () => void loadHistory('retry'), { once: true, signal: lifecycle.signal });
         } else if (hasLoaded && reason !== 'periodic') {
