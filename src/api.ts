@@ -25,6 +25,38 @@ export async function fetchRecentEarthquakes(signal?: AbortSignal): Promise<Eart
   return payload.map(parseEarthquake).filter((item): item is Earthquake => item !== null);
 }
 
+/**
+ * Fetch a bounded page set only when the user starts a replay. The history API
+ * accepts at most 100 records per request; two pages cap replay reads at 200.
+ */
+export async function fetchReplayHistory(signal: AbortSignal): Promise<unknown[]> {
+  const pageSize = 100;
+  const maxPages = 2;
+  const records: unknown[] = [];
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const params = new URLSearchParams();
+    params.append('codes', '551');
+    params.append('codes', '556');
+    params.append('codes', '9611');
+    params.set('limit', String(pageSize));
+    params.set('offset', String(page * pageSize));
+    const response = await fetch(`https://api.p2pquake.net/v2/history?${params}`, {
+      signal,
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    });
+    if (response.status === 429) throw new Error('P2P APIのレート制限に達しました');
+    if (!response.ok) throw new Error(`過去データを取得できませんでした (HTTP ${response.status})`);
+    const payload: unknown = await response.json();
+    if (!Array.isArray(payload)) throw new Error('過去データの応答形式が正しくありません');
+    records.push(...payload.slice(0, pageSize));
+    if (payload.length < pageSize) break;
+  }
+
+  return records.slice(0, pageSize * maxPages);
+}
+
 export function parseEarthquake(value: unknown): Earthquake | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const item = value as P2PQuake;

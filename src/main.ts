@@ -1,9 +1,10 @@
 import './style.css';
-import { fetchRecentEarthquakes, parseEarthquake, parseEew, parseEewDetection, parseShakeDetection, parseUserquake } from './api';
+import { fetchRecentEarthquakes, fetchReplayHistory, parseEarthquake, parseEew, parseEewDetection, parseShakeDetection, parseUserquake } from './api';
 import { AudioNotifier, type AudioCue, type AudioNotifyResult } from './audioNotifier';
 import { EarthquakeStore, type EarthquakeMergeResult } from './earthquakeStore';
 import { COMPACT_MAP_VIEWBOX, MAP_VIEWBOX, projectCoordinates, projectEpicenter } from './mapProjection';
 import areasData from './epspAreas.json';
+import { buildReplayFrames, isReplayEligible, type ReplayFrame } from './replay';
 import { calculateLatency, formatAge, formatClock, formatLatency, parseP2pTimestamp, type LatencyValue } from './timeUtils';
 import type { Earthquake, EewArea, EewMessage, EpspArea, ShakeDetection } from './types';
 
@@ -191,6 +192,17 @@ app.innerHTML = `
           </article>
           <div class="panel-update"><span>現在時刻</span><time id="current-time">—</time></div>
         </section>
+        <section id="selected-quake-actions" class="selected-quake-actions" aria-label="選択した地震の操作" hidden>
+          <div class="selected-quake-heading"><strong id="selected-quake-label">選択した地震</strong><a href="https://typhoon.yahoo.co.jp/weather/jp/earthquake/list/" target="_blank" rel="noopener noreferrer">Yahoo!の地震履歴を見る ↗</a></div>
+          <button id="selected-replay-start" type="button" class="replay-start-button">過去データを再生</button>
+          <p id="replay-message" class="replay-message" role="status" aria-live="polite" hidden></p>
+          <div id="replay-controls" class="replay-controls" hidden>
+            <div class="replay-controls-row"><span class="replay-badge">REPLAY</span><button id="replay-play-toggle" type="button">一時停止</button><button id="replay-speed-toggle" type="button">速度 1倍</button><button id="replay-live-return" type="button">LIVEに戻る</button></div>
+            <strong id="replay-target-label" class="replay-target-label"></strong>
+            <div class="replay-time-row"><span>再生時刻</span><time id="replay-time">—</time></div>
+            <small>取得できた記録による再構成です。配信当時の完全再現ではありません。</small>
+          </div>
+        </section>
         <section class="history-panel" aria-labelledby="history-heading">
           <div class="panel-section-heading"><div><h2 id="history-heading">地震履歴</h2><p>最近の情報 最大10件</p></div><span id="event-count" class="event-count">—</span></div>
           <div id="earthquake-list" class="earthquake-list"><div class="list-loading">情報を読み込んでいます</div></div>
@@ -206,7 +218,9 @@ app.innerHTML = `
             <g id="selected-earthquake-marker" aria-label="選択した地震の震源" />
           </g>
           <g id="eew-marker" class="eew-marker" aria-label="EEW震源" />
+          <g id="replay-map-layer" class="replay-map-layer" aria-label="過去データのリプレイ" />
         </svg>
+        <div id="replay-map-banner" class="replay-map-banner" role="status" aria-live="polite" hidden><strong>REPLAY</strong><span>過去データの再構成</span><span id="replay-map-target">—</span></div>
         <div class="map-controls" aria-label="地図操作">
           <button id="map-zoom-in" type="button" aria-label="地図を拡大" title="拡大">＋</button>
           <button id="map-zoom-out" type="button" aria-label="地図を縮小" title="縮小">−</button>
@@ -263,6 +277,13 @@ app.innerHTML = `
               <button type="button" data-test-action="connection-reconnecting">RECONNECTING</button>
               <button type="button" data-test-action="connection-offline">OFFLINE</button>
             </div>
+            <div class="test-control-group" aria-label="簡易リプレイテスト">
+              <span class="test-control-label">過去データ再生</span>
+              <button type="button" data-test-action="replay-eew">選択地震 EEW fixture</button>
+              <button type="button" data-test-action="replay-shake">選択地震 揺れ解析 fixture</button>
+              <button type="button" data-test-action="replay-no-data">データなし地震を選択</button>
+              <button type="button" data-test-action="replay-live-priority">再生中にLIVE EEW</button>
+            </div>
             <button type="button" class="test-reset-button" data-test-action="reset">全状態リセット</button>
           </div>
           <div class="test-log" aria-label="テストイベントログ">
@@ -276,6 +297,19 @@ app.innerHTML = `
 
 const latestCard = document.querySelector<HTMLElement>('#latest-card')!;
 const list = document.querySelector<HTMLDivElement>('#earthquake-list')!;
+const selectedQuakeActions = document.querySelector<HTMLElement>('#selected-quake-actions')!;
+const selectedQuakeLabel = document.querySelector<HTMLElement>('#selected-quake-label')!;
+const selectedReplayStart = document.querySelector<HTMLButtonElement>('#selected-replay-start')!;
+const replayMessage = document.querySelector<HTMLElement>('#replay-message')!;
+const replayControls = document.querySelector<HTMLElement>('#replay-controls')!;
+const replayPlayToggle = document.querySelector<HTMLButtonElement>('#replay-play-toggle')!;
+const replaySpeedToggle = document.querySelector<HTMLButtonElement>('#replay-speed-toggle')!;
+const replayLiveReturn = document.querySelector<HTMLButtonElement>('#replay-live-return')!;
+const replayTargetLabel = document.querySelector<HTMLElement>('#replay-target-label')!;
+const replayTime = document.querySelector<HTMLTimeElement>('#replay-time')!;
+const replayMapLayer = document.querySelector<SVGGElement>('#replay-map-layer')!;
+const replayMapBanner = document.querySelector<HTMLDivElement>('#replay-map-banner')!;
+const replayMapTarget = document.querySelector<HTMLElement>('#replay-map-target')!;
 const currentTime = document.querySelector<HTMLTimeElement>('#current-time')!;
 const monitorCurrentTime = document.querySelector<HTMLElement>('#monitor-current-time')!;
 const eventCount = document.querySelector<HTMLSpanElement>('#event-count')!;
@@ -366,6 +400,17 @@ let reconnectTimer: number | undefined;
 let reconnectAttempt = 0;
 let connectionEstablished = false;
 let selectedEarthquakeId: string | null = null;
+interface ReplayState {
+  target: Earthquake;
+  frames: readonly ReplayFrame[];
+  index: number;
+  playing: boolean;
+  speed: 1 | 4;
+}
+let replayState: ReplayState | null = null;
+let replayTimer: number | undefined;
+let replayTimeoutTimer: number | undefined;
+let replayController: AbortController | undefined;
 let settings = readSettings();
 const audioNotifier = new AudioNotifier(isEewSandbox);
 let currentShakeDetection: ShakeDetection | null = null;
@@ -426,6 +471,7 @@ type TestFixturesModule = typeof import('./testFixtures/fixtures');
 let testFixtures: TestFixturesModule | null = null;
 let testEarthquakeSequence = 0;
 let testBackfillSequence = 0;
+let testNoReplayTargetId: string | null = null;
 const testLogs: string[] = [];
 
 function readSettings(): MonitorSettings {
@@ -802,10 +848,12 @@ function resetMapToNation(): void {
   if (activeEewEventId) suppressedEewEventId = activeEewEventId;
   if (currentShakeDetection) suppressedShakeEventId = currentShakeDetection.startedAt;
   mapManualOverride = false;
+  stopReplay();
   selectedEarthquakeId = null;
   resetMapView();
   renderMarkers(store.recent);
   renderList(store.recent);
+  renderSelectedQuakeActions();
 }
 
 function highConfidenceAreas(detection: ShakeDetection | null): Array<{ area: EpspArea; confidence: number }> {
@@ -1433,6 +1481,209 @@ function renderList(earthquakes: readonly Earthquake[]): void {
   eventCount.textContent = `${earthquakes.length}件`;
 }
 
+function renderSelectedQuakeActions(): void {
+  const selected = store.recent.find((quake) => quake.id === selectedEarthquakeId);
+  selectedQuakeActions.hidden = !selected;
+  if (!selected) {
+    selectedReplayStart.disabled = false;
+    replayMessage.hidden = true;
+    return;
+  }
+  selectedQuakeLabel.textContent = `${selected.hypocenter ?? '震源未判明'} · ${formatTime(selected.time)}`;
+  selectedReplayStart.disabled = !isReplayEligible(selected) || replayController !== undefined;
+  selectedReplayStart.title = isReplayEligible(selected) ? '取得可能な過去データを検索して再生します' : '過去3時間以内の地震が対象です';
+  if (!isReplayEligible(selected) && !replayState && replayController === undefined) {
+    replayMessage.hidden = false;
+    replayMessage.textContent = 'リプレイ対象は発生から3時間以内の地震です';
+  }
+  renderReplayControls();
+}
+
+function renderReplayControls(): void {
+  const replay = replayState;
+  replayControls.hidden = !replay;
+  replayMapBanner.hidden = !replay;
+  if (!replay) {
+    replayMapLayer.replaceChildren();
+    return;
+  }
+  const frame = replay.frames[replay.index];
+  const location = replay.target.hypocenter ?? '震源未判明';
+  replayTargetLabel.textContent = `${location} · ${formatTime(replay.target.time)}`;
+  replayMapTarget.textContent = `${location} · ${formatTime(replay.target.time)}`;
+  replayPlayToggle.textContent = replay.playing ? '一時停止' : replay.index >= replay.frames.length - 1 ? '最初から再生' : '再生';
+  replaySpeedToggle.textContent = `速度 ${replay.speed}倍`;
+  if (frame) replayTime.textContent = formatClock(frame.at);
+  selectedReplayStart.disabled = true;
+}
+
+function renderReplayFrame(frame: ReplayFrame): void {
+  replayMapLayer.replaceChildren();
+  const svgNamespace = 'http://www.w3.org/2000/svg';
+  if (frame.kind === 'quake') {
+    const point = projectEpicenter(frame.earthquake);
+    if (point) {
+      const marker = document.createElementNS(svgNamespace, 'g');
+      marker.setAttribute('class', 'replay-quake-marker');
+      marker.setAttribute('transform', `translate(${point.x} ${point.y})`);
+      const circle = document.createElementNS(svgNamespace, 'circle');
+      circle.setAttribute('r', '8');
+      marker.append(circle);
+      const center = document.createElementNS(svgNamespace, 'circle');
+      center.setAttribute('r', '2.5');
+      center.setAttribute('class', 'replay-marker-center');
+      marker.append(center);
+      replayMapLayer.append(marker);
+    }
+  } else if (frame.kind === 'eew') {
+    const hypocenter = frame.eew.earthquake?.hypocenter;
+    const point = hypocenter?.latitude !== null && hypocenter?.latitude !== undefined && hypocenter.longitude !== null && hypocenter.longitude !== undefined
+      ? projectCoordinates(hypocenter.latitude, hypocenter.longitude)
+      : null;
+    if (point) {
+      const marker = document.createElementNS(svgNamespace, 'g');
+      marker.setAttribute('class', 'replay-eew-marker');
+      marker.setAttribute('transform', `translate(${point.x} ${point.y})`);
+      const diamond = document.createElementNS(svgNamespace, 'path');
+      diamond.setAttribute('d', 'M 0 -10 L 10 0 L 0 10 L -10 0 Z');
+      marker.append(diamond);
+      replayMapLayer.append(marker);
+    }
+  } else {
+    for (const area of frame.areas) {
+      const point = projectCoordinates(area.latitude, area.longitude);
+      if (!point) continue;
+      const marker = document.createElementNS(svgNamespace, 'circle');
+      marker.setAttribute('class', 'replay-shake-area');
+      marker.setAttribute('cx', String(point.x));
+      marker.setAttribute('cy', String(point.y));
+      marker.setAttribute('r', '5');
+      marker.setAttribute('aria-label', area.name);
+      replayMapLayer.append(marker);
+    }
+  }
+  const description = frame.kind === 'quake' ? '地震情報' : frame.kind === 'eew' ? 'EEW記録' : `揺れ解析 ${frame.areas.length}地域`;
+  replayMapBanner.dataset.frame = description;
+  replayMapBanner.setAttribute('aria-label', `REPLAY 過去データの再構成 ${description}`);
+}
+
+function clearReplayTimers(): void {
+  if (replayTimer !== undefined) window.clearTimeout(replayTimer);
+  replayTimer = undefined;
+  if (replayTimeoutTimer !== undefined) window.clearTimeout(replayTimeoutTimer);
+  replayTimeoutTimer = undefined;
+}
+
+function stopReplay(message?: string): void {
+  replayController?.abort();
+  replayController = undefined;
+  clearReplayTimers();
+  replayState = null;
+  renderReplayControls();
+  selectedReplayStart.disabled = !store.recent.some((quake) => quake.id === selectedEarthquakeId && isReplayEligible(quake));
+  if (message) {
+    replayMessage.hidden = false;
+    replayMessage.textContent = message;
+  }
+}
+
+function scheduleReplayFrame(): void {
+  if (!replayState?.playing) return;
+  const current = replayState.frames[replayState.index];
+  const nextIndex = replayState.index + 1;
+  if (!current || nextIndex >= replayState.frames.length) {
+    replayState.playing = false;
+    renderReplayControls();
+    return;
+  }
+  const next = replayState.frames[nextIndex]!;
+  const delay = Math.max(250, Math.min(4_000, (next.at - current.at) / replayState.speed));
+  replayTimer = window.setTimeout(() => {
+    replayTimer = undefined;
+    if (!replayState?.playing) return;
+    replayState.index = nextIndex;
+    const frame = replayState.frames[nextIndex];
+    if (frame) renderReplayFrame(frame);
+    renderReplayControls();
+    scheduleReplayFrame();
+  }, delay);
+}
+
+async function startReplayForSelected(testKind?: 'eew' | 'shake' | 'none'): Promise<void> {
+  if (replayController || replayState) return;
+  const target = store.recent.find((quake) => quake.id === selectedEarthquakeId);
+  if (!target) {
+    replayMessage.hidden = false;
+    replayMessage.textContent = '先に地震履歴から地震を選択してください';
+    return;
+  }
+  if (!isReplayEligible(target)) {
+    replayMessage.hidden = false;
+    replayMessage.textContent = 'この地震は発生から3時間を超えているため再生できません';
+    return;
+  }
+  replayMessage.hidden = true;
+  selectedReplayStart.disabled = true;
+  let payloads: unknown[];
+
+  if (isTestMode) {
+    if (!testFixtures || testKind === 'none' || target.id === testNoReplayTargetId) payloads = [];
+    else if (testKind === 'eew') payloads = [testFixtures.createTestReplayEew(target)];
+    else if (testKind === 'shake') payloads = [testFixtures.createTestReplayShake(target, nearestAreaCode(target))];
+    else payloads = [testFixtures.createTestReplayEew(target), testFixtures.createTestReplayShake(target, nearestAreaCode(target))];
+  } else {
+    const controller = new AbortController();
+    replayController = controller;
+    replayTimeoutTimer = window.setTimeout(() => controller.abort(new DOMException('Replay request timed out', 'TimeoutError')), 12_000);
+    try {
+      payloads = await fetchReplayHistory(controller.signal);
+    } catch (error) {
+      if (controller.signal.aborted && replayController !== controller) return;
+      if (controller.signal.aborted && disposed) return;
+      const message = error instanceof Error ? error.message : '通信に失敗しました';
+      replayMessage.hidden = false;
+      replayMessage.textContent = controller.signal.aborted ? '過去データの取得がタイムアウトしました' : `${message}。リプレイを中断しました`;
+      selectedReplayStart.disabled = false;
+      return;
+    } finally {
+      if (replayTimeoutTimer !== undefined) window.clearTimeout(replayTimeoutTimer);
+      replayTimeoutTimer = undefined;
+      if (replayController === controller) replayController = undefined;
+    }
+  }
+
+  if (disposed) return;
+  const frames = buildReplayFrames(payloads, target, epspAreas);
+  if (frames.length === 0) {
+    replayMessage.hidden = false;
+    replayMessage.textContent = 'この地震の再生データはありません';
+    selectedReplayStart.disabled = false;
+    if (isTestMode) addTestLog('replay: matching fixture records not found');
+    return;
+  }
+
+  replayState = { target, frames, index: 0, playing: true, speed: 1 };
+  renderReplayControls();
+  renderReplayFrame(frames[0]!);
+  replayMessage.hidden = true;
+  if (isTestMode) addTestLog(`replay started: ${target.hypocenter ?? '震源未判明'} (${frames.length} frames)`);
+  scheduleReplayFrame();
+}
+
+function nearestAreaCode(target: Earthquake): string {
+  if (target.latitude === null || target.longitude === null) return '241';
+  let nearest: EpspArea | undefined;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const area of epspAreas) {
+    const distance = Math.hypot(target.latitude - area.latitude, (target.longitude - area.longitude) * Math.cos(target.latitude * Math.PI / 180));
+    if (distance < nearestDistance) {
+      nearest = area;
+      nearestDistance = distance;
+    }
+  }
+  return nearest?.code ?? '241';
+}
+
 function intensityClass(scale: number | null): string {
   if (scale !== null && scale >= 55) return 'intensity-severe';
   if (scale !== null && scale >= 40) return 'intensity-strong';
@@ -1494,6 +1745,7 @@ function renderAll(animateLatest = false): void {
   renderLatest(store.recent[0]);
   renderMarkers(store.recent, animateLatest);
   renderList(store.recent);
+  renderSelectedQuakeActions();
   hasLoaded = true;
   document.querySelector('#refresh-error')?.remove();
 }
@@ -1734,13 +1986,16 @@ function setTestControlsEnabled(enabled: boolean): void {
 }
 
 function resetTestState(): void {
+  stopReplay();
   testEarthquakeSequence = 0;
   testBackfillSequence = 0;
+  testNoReplayTargetId = null;
   audioNotifier.clearPending();
   earthquakeReceiveTimings.clear();
   earthquakeReceiveTimingOrder.length = 0;
   lastWebSocketReceivedAt = null;
   selectedEarthquakeId = null;
+  replayMessage.hidden = true;
   connectionEstablished = false;
   reconnectAttempt = 0;
   mapManualOverride = false;
@@ -1838,6 +2093,28 @@ function runTestAction(action: string): void {
     case 'eew-cancel':
       handleIncomingPayload(testFixtures.createTestEewCancelled(), 'test');
       break;
+    case 'replay-eew':
+      void startReplayForSelected('eew');
+      break;
+    case 'replay-shake':
+      void startReplayForSelected('shake');
+      break;
+    case 'replay-no-data': {
+      handleIncomingPayload(testFixtures.createTestNoReplayEarthquake(), 'test');
+      const latest = store.recent[0];
+      if (latest) {
+        testNoReplayTargetId = latest.id;
+        selectEarthquakeById(latest.id);
+      }
+      addTestLog('selected synthetic quake with no replay records');
+      break;
+    }
+    case 'replay-live-priority': {
+      if (!replayState && !replayController) void startReplayForSelected('eew');
+      handleIncomingPayload(testFixtures.createTestEewReport1(), 'test-priority');
+      addTestLog('live EEW fixture preempted replay');
+      break;
+    }
     case 'connection-live':
       testConnectionAdapter.setState('live');
       break;
@@ -1862,21 +2139,53 @@ testPanel?.addEventListener('click', (event) => {
   if (button?.dataset.testAction) runTestAction(button.dataset.testAction);
 }, { signal: lifecycle.signal });
 
+function selectEarthquakeById(id: string): void {
+  const selected = store.recent.find((quake) => quake.id === id);
+  if (!selected) return;
+  if (selectedEarthquakeId !== id) stopReplay();
+  replayMessage.hidden = true;
+  selectedEarthquakeId = id;
+  renderMarkers(store.recent);
+  renderList(store.recent);
+  renderSelectedQuakeActions();
+  const point = projectEpicenter(selected);
+  if (point) {
+    markMapUserInteraction();
+    focusMapOnPoints([point], 145, 260);
+  }
+}
+
 list.addEventListener('click', (event) => {
   const target = event.target;
   if (!(target instanceof Element)) return;
   const row = target.closest<HTMLButtonElement>('[data-earthquake-id]');
   const id = row?.dataset.earthquakeId;
-  if (!id || !store.recent.some((quake) => quake.id === id)) return;
-  selectedEarthquakeId = id;
-  renderMarkers(store.recent);
-  renderList(store.recent);
-  const selected = store.recent.find((quake) => quake.id === id);
-  const point = selected ? projectEpicenter(selected) : null;
-  if (point) {
-    markMapUserInteraction();
-    focusMapOnPoints([point], 145, 260);
+  if (id) selectEarthquakeById(id);
+}, { signal: lifecycle.signal });
+
+selectedReplayStart.addEventListener('click', () => void startReplayForSelected(), { signal: lifecycle.signal });
+replayPlayToggle.addEventListener('click', () => {
+  if (!replayState) return;
+  if (replayState.index >= replayState.frames.length - 1 && !replayState.playing) replayState.index = 0;
+  replayState.playing = !replayState.playing;
+  renderReplayControls();
+  if (replayState.playing) {
+    const frame = replayState.frames[replayState.index];
+    if (frame) renderReplayFrame(frame);
+    scheduleReplayFrame();
   }
+}, { signal: lifecycle.signal });
+replaySpeedToggle.addEventListener('click', () => {
+  if (!replayState) return;
+  replayState.speed = replayState.speed === 1 ? 4 : 1;
+  if (replayTimer !== undefined) window.clearTimeout(replayTimer);
+  replayTimer = undefined;
+  renderReplayControls();
+  scheduleReplayFrame();
+}, { signal: lifecycle.signal });
+replayLiveReturn.addEventListener('click', () => {
+  stopReplay('LIVE監視へ戻りました');
+  renderSelectedQuakeActions();
 }, { signal: lifecycle.signal });
 
 function escapeHtml(value: string): string {
@@ -1951,12 +2260,15 @@ window.addEventListener('online', () => {
   if (!isTestMode && !disposed) void loadHistory('online');
 }, { signal: lifecycle.signal });
 
-type IncomingPayloadSource = 'websocket' | 'test';
+type IncomingPayloadSource = 'websocket' | 'test' | 'test-priority';
 
 function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource = 'websocket', browserReceivedAt = Date.now()): void {
   lastWebSocketReceivedAt = browserReceivedAt;
   const parsedEew = parseEew(payload);
   if (parsedEew) {
+    if (replayState || replayController) {
+      stopReplay('LIVEのEEW情報を優先して過去データの再生を終了しました');
+    }
     const receiveTiming = createReceiveTiming(payload, browserReceivedAt, parsedEew.issue.time);
     const result = updateEew(parsedEew, receiveTiming);
     if (result === 'new' && settings.eewAudioEnabled) notifyAudio('eew');
@@ -1990,6 +2302,9 @@ function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource =
 
   const parsedShakeDetection = parseShakeDetection(payload);
   if (parsedShakeDetection) {
+    if ((parsedShakeDetection.count > 0 && parsedShakeDetection.confidence > 0) && (replayState || replayController)) {
+      stopReplay('LIVEの揺れ解析情報を優先して過去データの再生を終了しました');
+    }
     const receiveTiming = createReceiveTiming(payload, browserReceivedAt, parsedShakeDetection.updatedAt);
     const shakeResult = updateShakeDetection(parsedShakeDetection, receiveTiming);
     if (shakeResult === 'started' && settings.shakeAudioEnabled) notifyAudio('shake');
@@ -2136,6 +2451,10 @@ function initializeProductionMode(): void {
 window.addEventListener('pagehide', () => {
   disposed = true;
   lifecycle.abort();
+  replayController?.abort();
+  replayController = undefined;
+  clearReplayTimers();
+  replayState = null;
   historyController?.abort();
   if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
   reconnectTimer = undefined;

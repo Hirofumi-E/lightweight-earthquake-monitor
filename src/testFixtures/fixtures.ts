@@ -1,4 +1,5 @@
-import type { P2PEEW, P2PQuake, P2PUserquake, P2PUserquakeEvaluation } from '../types';
+import { parseP2pTimestamp } from '../timeUtils';
+import type { Earthquake, P2PEEW, P2PQuake, P2PUserquake, P2PUserquakeEvaluation } from '../types';
 
 /**
  * Development-only payloads. These are deliberately synthetic and never represent
@@ -161,6 +162,66 @@ export function createTestSameTimeDifferentSource(): P2PQuake {
 export function createTestHistoryBackfill(sequence: number): P2PQuake {
   const earthquake = createTestEarthquake(1_000 + Math.max(1, Math.trunc(sequence)));
   return { ...earthquake, id: `test-551-history-${sequence}` };
+}
+
+/** Fake P2P history for replay-only scenarios; never used by production mode. */
+export function createTestReplayEew(target: Earthquake): P2PEEW {
+  const origin = parseP2pTimestamp(target.time) ?? Date.now();
+  const time = p2pTime(origin);
+  const issued = p2pTime(origin - 45_000);
+  return {
+    id: `test-replay-556-${target.id}`,
+    code: 556,
+    time,
+    test: false,
+    cancelled: false,
+    issue: { time: issued, eventId: `REPLAY-${target.id}`, serial: '1' },
+    earthquake: {
+      originTime: target.time,
+      arrivalTime: undefined,
+      condition: undefined,
+      hypocenter: {
+        name: target.hypocenter ?? 'テスト震源',
+        reduceName: target.hypocenter ?? undefined,
+        latitude: target.latitude ?? undefined,
+        longitude: target.longitude ?? undefined,
+        depth: target.depth ?? undefined,
+        magnitude: target.magnitude ?? undefined,
+      },
+    },
+    areas: [{ pref: '千葉県', name: 'TEST 地域', scaleFrom: 30, scaleTo: 40, kindCode: '10', arrivalTime: time }],
+  };
+}
+
+export function createTestReplayShake(target: Earthquake, areaCode = '241'): P2PUserquakeEvaluation {
+  const origin = parseP2pTimestamp(target.time) ?? Date.now();
+  const startedAt = target.time;
+  const updatedAt = p2pTime(origin + 35_000);
+  return {
+    id: `test-replay-9611-${target.id}`,
+    code: 9611,
+    time: updatedAt,
+    count: 5,
+    confidence: 0.91,
+    started_at: startedAt,
+    updated_at: updatedAt,
+    area_confidences: { [areaCode]: { confidence: 0.91, count: 4 } },
+  };
+}
+
+export function createTestNoReplayEarthquake(): P2PQuake {
+  const time = p2pTime();
+  return {
+    id: `test-no-replay-551-${Date.now()}`,
+    code: 551,
+    time,
+    issue: { source: 'TEST FIXTURE', time, type: 'ScaleAndDestination' },
+    earthquake: {
+      time,
+      maxScale: 20,
+      hypocenter: { name: 'テスト再生データなし震源', latitude: 37.5, longitude: 138.0, depth: 20, magnitude: 3.5 },
+    },
+  };
 }
 
 /** Synthetic individual 561 reports, using catalog area codes. */
