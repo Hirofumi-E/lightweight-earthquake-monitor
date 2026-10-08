@@ -5,7 +5,36 @@ import type { Earthquake, EewMessage, EpspArea, ShakeDetection } from './types';
 export type ReplayFrame =
   | { at: number; kind: 'quake'; earthquake: Earthquake }
   | { at: number; kind: 'eew'; eew: EewMessage }
-  | { at: number; kind: 'shake'; detection: ShakeDetection; areas: readonly EpspArea[] };
+  | { at: number; kind: 'shake'; detection: ShakeDetection; areas: readonly { area: EpspArea; confidence: number }[] };
+
+export interface ReplayCounts { quake: number; eew: number; shake: number; }
+
+export function countReplayRecords(payloads: readonly unknown[]): ReplayCounts {
+  const counts = { quake: 0, eew: 0, shake: 0 };
+  for (const payload of payloads) {
+    if (!isRecord(payload)) continue;
+    if (payload.code === 551) counts.quake += 1;
+    else if (payload.code === 556) counts.eew += 1;
+    else if (payload.code === 9611) counts.shake += 1;
+  }
+  return counts;
+}
+
+/** A timeline needs at least two distinct visual states from EEW or sensing records. */
+export function hasVisualReplay(frames: readonly ReplayFrame[]): boolean {
+  const states = new Set<string>();
+  for (const frame of frames) {
+    if (frame.kind === 'eew') {
+      const center = frame.eew.earthquake?.hypocenter;
+      states.add(JSON.stringify(['eew', center?.latitude, center?.longitude,
+        frame.eew.areas.map((area) => [area.pref, area.scaleTo]).sort()]));
+    } else if (frame.kind === 'shake') {
+      states.add(JSON.stringify(['shake', frame.areas.map(({ area, confidence }) =>
+        [area.code, confidence >= .8 ? 'A' : confidence >= .6 ? 'B' : 'C']).sort()]));
+    }
+  }
+  return states.size >= 2;
+}
 
 export const REPLAY_WINDOW_MS = 3 * 60 * 60 * 1_000;
 export const REPLAY_MAX_FRAMES = 200;
@@ -62,9 +91,11 @@ export function buildReplayFrames(
       const at = parseP2pTimestamp(detection.updatedAt) ?? parseP2pTimestamp(detection.time);
       if (at !== null && at >= windowStart && at <= windowEnd) {
         ids.add(detection.id);
-        const detectedAreas = areas.filter((area) => {
+        const detectedAreas = areas.flatMap((area) => {
           const confidence = detection.areaConfidences.get(area.code) ?? detection.areaConfidences.get(String(Number(area.code)));
-          return confidence !== undefined && confidence >= 0.8;
+          return confidence !== undefined && confidence > 0 &&
+            distanceKm(target.latitude!, target.longitude!, area.latitude, area.longitude) <= MAX_SHAKE_REGION_DISTANCE_KM
+            ? [{ area, confidence }] : [];
         });
         frames.push({ at, kind: 'shake', detection, areas: detectedAreas });
       }

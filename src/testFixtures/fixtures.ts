@@ -209,6 +209,67 @@ export function createTestReplayShake(target: Earthquake, areaCode = '241'): P2P
   };
 }
 
+export function createTestReplayQuake(target: Earthquake): P2PQuake {
+  const origin = parseP2pTimestamp(target.time) ?? Date.now();
+  const issued = p2pTime(origin + 70_000);
+  return {
+    id: `test-replay-551-${target.id}`, code: 551, time: issued,
+    issue: { source: 'TEST FIXTURE', time: issued, type: 'DetailScale' },
+    earthquake: {
+      time: target.time, maxScale: target.maxScale ?? -1,
+      hypocenter: { name: target.hypocenter ?? 'テスト震源', latitude: target.latitude ?? undefined,
+        longitude: target.longitude ?? undefined, depth: target.depth ?? undefined,
+        magnitude: target.magnitude ?? undefined },
+    },
+  };
+}
+
+/** Several genuinely different recorded states; no interpolated wave or observations. */
+export function createTestReplayEewReports(target: Earthquake): P2PEEW[] {
+  const origin = parseP2pTimestamp(target.time) ?? Date.now();
+  const initial = createTestReplayEew(target);
+  const [firstPref, secondPref, thirdPref] = (target.latitude ?? 35.5) < 34
+    ? ['熊本県', '大分県', '宮崎県']
+    : (target.latitude ?? 35.5) > 36.5
+      ? ['福島県', '宮城県', '茨城県']
+      : ['千葉県', '茨城県', '東京都'];
+  const areas = [
+    [{ pref: firstPref, name: 'TEST 地域1', scaleFrom: 30, scaleTo: 40, kindCode: '10', arrivalTime: p2pTime(origin) }],
+    [{ pref: firstPref, name: 'TEST 地域1', scaleFrom: 40, scaleTo: 45, kindCode: '10', arrivalTime: p2pTime(origin) },
+      { pref: secondPref, name: 'TEST 地域2', scaleFrom: 30, scaleTo: 30, kindCode: '10', arrivalTime: p2pTime(origin) }],
+    [{ pref: firstPref, name: 'TEST 地域1', scaleFrom: 40, scaleTo: 50, kindCode: '11', arrivalTime: p2pTime(origin) },
+      { pref: secondPref, name: 'TEST 地域2', scaleFrom: 30, scaleTo: 40, kindCode: '10', arrivalTime: p2pTime(origin) },
+      { pref: thirdPref, name: 'TEST 地域3', scaleFrom: 20, scaleTo: 30, kindCode: '10', arrivalTime: p2pTime(origin) }],
+  ];
+  return areas.map((forecast, index) => ({ ...initial,
+    id: `test-replay-556-${target.id}-${index + 1}`,
+    time: p2pTime(origin - 45_000 + index * 18_000),
+    issue: { ...initial.issue!, time: p2pTime(origin - 45_000 + index * 18_000), serial: String(index + 1) },
+    areas: forecast,
+    earthquake: initial.earthquake ? { ...initial.earthquake,
+      hypocenter: { ...initial.earthquake.hypocenter, longitude: (target.longitude ?? 141.1) + index * 0.06 } } : undefined,
+  }));
+}
+
+export function createTestReplayShakeReports(target: Earthquake, areaCodes: readonly string[] = ['240', '241', '205']): P2PUserquakeEvaluation[] {
+  const origin = parseP2pTimestamp(target.time) ?? Date.now();
+  const [first = '240', second = '241', third = '205'] = areaCodes;
+  const initial = createTestReplayShake(target, first);
+  const areaSets = [
+    { [first]: { confidence: 0.84, count: 3 }, [second]: { confidence: 0.55, count: 1 } },
+    { [first]: { confidence: 0.95, count: 7 }, [second]: { confidence: 0.83, count: 4 }, [third]: { confidence: 0.67, count: 2 } },
+    { [first]: { confidence: 0.92, count: 9 }, [second]: { confidence: 0.9, count: 6 }, [third]: { confidence: 0.82, count: 4 } },
+  ];
+  return areaSets.map((areaConfidences, index) => ({ ...initial,
+    id: `test-replay-9611-${target.id}-${index + 1}`,
+    time: p2pTime(origin + 20_000 + index * 18_000),
+    updated_at: p2pTime(origin + 20_000 + index * 18_000),
+    count: 5 + index * 7,
+    confidence: 0.84 + index * 0.05,
+    area_confidences: areaConfidences,
+  }));
+}
+
 export function createTestNoReplayEarthquake(): P2PQuake {
   const time = p2pTime();
   return {

@@ -143,6 +143,9 @@ button { color: inherit; font: inherit; }
 .replay-target-label { overflow: hidden; color: #dce7ee; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .replay-time-row { display: flex; justify-content: space-between; color: #a4b2bd; font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .replay-controls small { color: #8394a0; font-size: 8px; line-height: 1.35; }
+.replay-progress { width: 100%; height: 5px; accent-color: #d5a85d; }
+.replay-record-detail { color: #d6e0e8; font-size: 9px; line-height: 1.3; }
+.replay-controls-row button:disabled { opacity: .4; cursor: default; }
 .list-loading, .empty-state { min-height: 100px; display: flex; align-items: center; justify-content: center; gap: 9px; padding: 16px; color: var(--muted); font-size: 12px; text-align: center; }
 
 .map-panel { position: relative; grid-column: 1; grid-row: 1; min-width: 0; min-height: 0; display: grid; place-items: center; overflow: hidden; background: var(--map-sea); }
@@ -152,13 +155,24 @@ button { color: inherit; font: inherit; }
 .eew-prefecture { pointer-events: none; }
 .earthquake-markers { overflow: visible; }
 .replay-map-layer { pointer-events: none; }
+.japan-map.is-replaying #selected-earthquake-marker,
+.japan-map.is-replaying #raw-shake-markers,
+.japan-map.is-replaying #shake-detection-markers,
+.japan-map.is-replaying #eew-prefecture-overlays,
+.japan-map.is-replaying #eew-marker { display: none; }
 .replay-map-banner { position: absolute; z-index: 4; top: 10px; left: 50%; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 30px); transform: translateX(-50%); padding: 6px 9px; border: 1px solid #775e34; border-radius: 4px; background: #1d1a14ef; color: #d9c18f; font-size: 9px; white-space: nowrap; }
 .replay-map-banner strong { color: #ffd27e; font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .replay-map-banner span:last-child { overflow: hidden; text-overflow: ellipsis; }
 .replay-quake-marker circle:first-child { fill: #e8ad59; fill-opacity: .28; stroke: #ffe1a4; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .replay-marker-center { fill: #fff4d8; }
 .replay-eew-marker path { fill: #d89c63; fill-opacity: .28; stroke: #ffbe78; stroke-width: 2; vector-effect: non-scaling-stroke; }
-.replay-shake-area { fill: #9bb9db; fill-opacity: .35; stroke: #b9d7f0; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.replay-forecast { fill-opacity: .7; stroke: #f2dbab; stroke-opacity: .8; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.replay-shake-area circle:first-child { fill: transparent; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.replay-shake-area circle:last-child { stroke: #e5f2f5; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.replay-shake-area.is-grade-a circle { stroke: #f4c974; fill: #e7a963; }
+.replay-shake-area.is-grade-b circle { stroke: #8dc5da; fill: #59a6c4; }
+.replay-shake-area.is-grade-c circle { stroke: #6b8fa7; fill: #456a82; }
+.replay-shake-area circle:first-child { fill: none; }
 .shake-detection-markers { overflow: visible; pointer-events: none; }
 .map-controls { position: absolute; z-index: 5; top: auto; right: 12px; bottom: 42px; left: auto; display: flex; gap: 4px; transform: none; pointer-events: auto; }
 .map-controls button { min-width: 29px; height: 27px; padding: 0 7px; border: 1px solid #3c596b; border-radius: 3px; background: #12212dcc; color: #d3e1ea; font-size: 14px; line-height: 1; cursor: pointer; }
