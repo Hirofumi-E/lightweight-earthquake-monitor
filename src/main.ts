@@ -198,7 +198,7 @@ app.innerHTML = `
           <p id="replay-message" class="replay-message" role="status" aria-live="polite" hidden></p>
           <div id="replay-controls" class="replay-controls" hidden>
             <div class="replay-controls-row"><span id="replay-badge" class="replay-badge">REPLAY</span><button id="replay-restart" type="button">最初から</button><button id="replay-previous" type="button" aria-label="前の記録">前へ</button><button id="replay-play-toggle" type="button">一時停止</button><button id="replay-next" type="button" aria-label="次の記録">次へ</button><button id="replay-speed-toggle" type="button">標準</button><button id="replay-live-return" type="button">LIVEに戻る</button></div>
-            <strong id="replay-target-label" class="replay-target-label"></strong>
+            <div class="replay-target-row"><b id="replay-target-scale" class="replay-target-scale">—</b><strong id="replay-target-label" class="replay-target-label"></strong></div>
             <div class="replay-time-row"><span id="replay-record-kind">記録</span><time id="replay-time">—</time><span id="replay-position">—</span></div>
             <progress id="replay-progress" class="replay-progress" max="1" value="0" aria-label="再生の進行状況"></progress>
             <span id="replay-record-detail" class="replay-record-detail"></span>
@@ -241,6 +241,7 @@ app.innerHTML = `
               <span class="test-control-label">地震情報</span>
               <button type="button" data-test-action="quake">通常地震を発生</button>
               <button type="button" data-test-action="history-backfill">履歴補完をシミュレート</button>
+              <button type="button" data-test-action="intensity-palette">震度1〜7・不明の色を表示（状態リセット）</button>
             </div>
             <div class="test-control-group" aria-label="551同一イベント統合テスト">
               <span class="test-control-label">551同一地震</span>
@@ -313,6 +314,7 @@ const replaySpeedToggle = document.querySelector<HTMLButtonElement>('#replay-spe
 const replayLiveReturn = document.querySelector<HTMLButtonElement>('#replay-live-return')!;
 const replayBadge = document.querySelector<HTMLElement>('#replay-badge')!;
 const replayTargetLabel = document.querySelector<HTMLElement>('#replay-target-label')!;
+const replayTargetScale = document.querySelector<HTMLElement>('#replay-target-scale')!;
 const replayTime = document.querySelector<HTMLTimeElement>('#replay-time')!;
 const replayRecordKind = document.querySelector<HTMLElement>('#replay-record-kind')!;
 const replayPosition = document.querySelector<HTMLElement>('#replay-position')!;
@@ -1443,6 +1445,17 @@ function scaleLabel(scale: number | null): string {
   return labels[scale] ?? '不明';
 }
 
+/** Use the displayed JMA intensity label as the single source for UI colors. */
+function intensityToneClass(label: string): string {
+  const classes: Record<string, string> = {
+    '0': 'intensity-0', '1': 'intensity-1', '2': 'intensity-2',
+    '3': 'intensity-3', '4': 'intensity-4', '5弱': 'intensity-5-weak',
+    '5強': 'intensity-5-strong', '6弱': 'intensity-6-weak',
+    '6強': 'intensity-6-strong', '7': 'intensity-7',
+  };
+  return classes[label] ?? 'intensity-unknown';
+}
+
 function renderLatest(latest: Earthquake | undefined): void {
   if (activeEew) {
     renderEewPanel(activeEew);
@@ -1461,6 +1474,7 @@ function renderLatest(latest: Earthquake | undefined): void {
   renderCompactPriorityAlert();
   renderEewReceiveMetrics(null);
   if (!latest) {
+    latestScale.className = `scale-badge ${intensityToneClass('不明')}`;
     latestDetails.hidden = true;
     latestReceiveMetrics.hidden = true;
     latestLoading.hidden = false;
@@ -1470,7 +1484,9 @@ function renderLatest(latest: Earthquake | undefined): void {
 
   latestLoading.hidden = true;
   latestDetails.hidden = false;
-  latestScale.textContent = scaleLabel(latest.maxScale);
+  const intensity = scaleLabel(latest.maxScale);
+  latestScale.textContent = intensity;
+  latestScale.className = `scale-badge ${intensityToneClass(intensity)}`;
   latestPlace.textContent = latest.hypocenter ?? '震源未判明';
   latestDate.textContent = formatTime(latest.time);
   latestMagnitude.textContent = `M ${latest.magnitude?.toFixed(1) ?? '—'}`;
@@ -1487,7 +1503,7 @@ function renderList(earthquakes: readonly Earthquake[]): void {
   }
 
   list.innerHTML = earthquakes.map((quake, index) => `
-    <button class="quake-row ${index === 0 ? 'is-latest' : ''} ${selectedEarthquakeId === quake.id ? 'is-selected' : ''}" type="button" data-earthquake-id="${escapeHtml(quake.id)}" aria-pressed="${selectedEarthquakeId === quake.id}">
+    <button class="quake-row ${intensityToneClass(scaleLabel(quake.maxScale))} ${index === 0 ? 'is-latest' : ''} ${selectedEarthquakeId === quake.id ? 'is-selected' : ''}" type="button" data-earthquake-id="${escapeHtml(quake.id)}" aria-pressed="${selectedEarthquakeId === quake.id}">
       <time datetime="${escapeHtml(quake.time)}">${formatTime(quake.time)}</time>
       <strong class="quake-place">${escapeHtml(quake.hypocenter ?? '震源未判明')}</strong>
       <span class="row-scale">震度 <b>${scaleLabel(quake.maxScale)}</b></span>
@@ -1534,8 +1550,13 @@ function renderReplayControls(): void {
   }
   const frame = replay.frames[replay.index];
   const location = replay.target.hypocenter ?? '震源未判明';
+  const targetIntensity = scaleLabel(replay.target.maxScale);
+  const targetTone = intensityToneClass(targetIntensity);
+  replayTargetScale.textContent = targetIntensity;
+  replayTargetScale.className = `replay-target-scale ${targetTone}`;
   replayTargetLabel.textContent = `${location} · ${formatTime(replay.target.time)}`;
   replayMapTarget.textContent = `${location} · ${formatTime(replay.target.time)}`;
+  replayMapTarget.className = targetTone;
   const replayLabel = replay.visual ? 'REPLAY' : replay.frames.some((item) => item.kind !== 'quake') ? '記録表示' : '発表履歴';
   replayBadge.textContent = replayLabel;
   replayMapBanner.querySelector('strong')!.textContent = replayLabel;
@@ -2102,6 +2123,11 @@ function runTestAction(action: string): void {
     case 'quake':
       testEarthquakeSequence += 1;
       handleIncomingPayload(testFixtures.createTestEarthquake(testEarthquakeSequence), 'test');
+      break;
+    case 'intensity-palette':
+      resetTestState();
+      for (const fixture of testFixtures.createTestIntensityPalette()) handleIncomingPayload(fixture, 'test');
+      addTestLog('震度1〜7・不明の配色fixtureを表示');
       break;
     case 'history-backfill': {
       testBackfillSequence += 1;

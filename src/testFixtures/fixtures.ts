@@ -43,6 +43,38 @@ export function createTestEarthquake(sequence: number): P2PQuake {
   };
 }
 
+/** Ten separate synthetic events for checking every intensity color in the history list. */
+export function createTestIntensityPalette(): P2PQuake[] {
+  const intensities = [
+    { scale: 10, label: '1' }, { scale: 20, label: '2' },
+    { scale: 30, label: '3' }, { scale: 40, label: '4' },
+    { scale: 45, label: '5弱' }, { scale: 50, label: '5強' },
+    { scale: 55, label: '6弱' }, { scale: 60, label: '6強' },
+    { scale: 70, label: '7' }, { scale: -1, label: '不明' },
+  ];
+  const batch = Date.now();
+  return intensities.map(({ scale, label }, index) => {
+    const time = p2pTime(batch - index * 60_000);
+    return {
+      id: `test-intensity-${batch}-${index}`,
+      code: 551,
+      time,
+      issue: { source: 'TEST FIXTURE', time, type: 'ScaleAndDestination' },
+      earthquake: {
+        time,
+        maxScale: scale,
+        hypocenter: {
+          name: `配色確認 震度${label}`,
+          latitude: 35.5 + index * .12,
+          longitude: 139.5 + index * .12,
+          depth: 20,
+          magnitude: 4.0,
+        },
+      },
+    };
+  });
+}
+
 const sameEventOriginTime = p2pTime(Date.now() - 60_000);
 let sameEventIssueBase = Date.now();
 let sameEventLastIssue = sameEventIssueBase;
