@@ -199,7 +199,8 @@ app.innerHTML = `
           <div id="replay-controls" class="replay-controls" hidden>
             <div class="replay-controls-row"><span id="replay-badge" class="replay-badge">REPLAY</span><button id="replay-restart" type="button">最初から</button><button id="replay-previous" type="button" aria-label="前の記録">前へ</button><button id="replay-play-toggle" type="button">一時停止</button><button id="replay-next" type="button" aria-label="次の記録">次へ</button><button id="replay-speed-toggle" type="button">標準</button><button id="replay-live-return" type="button">LIVEに戻る</button></div>
             <div class="replay-target-row"><b id="replay-target-scale" class="replay-target-scale">—</b><strong id="replay-target-label" class="replay-target-label"></strong></div>
-            <div class="replay-time-row"><span id="replay-record-kind">記録</span><time id="replay-time">—</time><span id="replay-position">—</span></div>
+            <div class="replay-time-row"><time id="replay-time">—</time><span id="replay-elapsed">経過 — / —</span></div>
+            <div class="replay-time-row"><span id="replay-record-kind">記録</span><span id="replay-position">—</span></div>
             <progress id="replay-progress" class="replay-progress" max="1" value="0" aria-label="再生の進行状況"></progress>
             <span id="replay-record-detail" class="replay-record-detail"></span>
             <small id="replay-record-counts"></small>
@@ -316,6 +317,7 @@ const replayBadge = document.querySelector<HTMLElement>('#replay-badge')!;
 const replayTargetLabel = document.querySelector<HTMLElement>('#replay-target-label')!;
 const replayTargetScale = document.querySelector<HTMLElement>('#replay-target-scale')!;
 const replayTime = document.querySelector<HTMLTimeElement>('#replay-time')!;
+const replayElapsed = document.querySelector<HTMLElement>('#replay-elapsed')!;
 const replayRecordKind = document.querySelector<HTMLElement>('#replay-record-kind')!;
 const replayPosition = document.querySelector<HTMLElement>('#replay-position')!;
 const replayProgress = document.querySelector<HTMLProgressElement>('#replay-progress')!;
@@ -423,6 +425,9 @@ interface ReplayState {
   index: number;
   playing: boolean;
   speed: 1 | 4;
+  elapsedMs: number;
+  durationMs: number;
+  lastTickAt: number | null;
 }
 let replayState: ReplayState | null = null;
 let replayTimer: number | undefined;
@@ -1539,6 +1544,24 @@ function replayIssueLabel(type: string): string {
   return labels[type] ?? '地震情報';
 }
 
+const replayClockFormatter = new Intl.DateTimeFormat('ja-JP', {
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Tokyo',
+});
+
+function formatReplayDuration(milliseconds: number): string {
+  const seconds = Math.floor(milliseconds / 1_000);
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function renderReplayClock(replay: ReplayState): void {
+  const clock = replayClockFormatter.format(new Date(replay.frames[0]!.at + replay.elapsedMs));
+  replayTime.textContent = `${replay.visual ? 'REPLAY ' : '記録 '}${clock}`;
+  replayElapsed.textContent = `経過 ${formatReplayDuration(replay.elapsedMs)} / ${formatReplayDuration(replay.durationMs)}`;
+  replayProgress.max = Math.max(1, replay.durationMs);
+  replayProgress.value = replay.elapsedMs;
+  replayMapBanner.querySelector('strong')!.textContent = `${replay.visual ? 'REPLAY' : '記録'} ${clock}`;
+}
+
 function renderReplayControls(): void {
   const replay = replayState;
   replayControls.hidden = !replay;
@@ -1559,7 +1582,6 @@ function renderReplayControls(): void {
   replayMapTarget.className = targetTone;
   const replayLabel = replay.visual ? 'REPLAY' : replay.frames.some((item) => item.kind !== 'quake') ? '記録表示' : '発表履歴';
   replayBadge.textContent = replayLabel;
-  replayMapBanner.querySelector('strong')!.textContent = replayLabel;
   replayPlayToggle.hidden = !replay.visual;
   replayRestart.hidden = !replay.visual;
   replaySpeedToggle.hidden = !replay.visual;
@@ -1567,12 +1589,9 @@ function renderReplayControls(): void {
   replaySpeedToggle.textContent = replay.speed === 1 ? '標準' : '高速';
   replayPrevious.disabled = replay.index === 0;
   replayNext.disabled = replay.index >= replay.frames.length - 1;
-  replayProgress.max = Math.max(1, replay.frames.length - 1);
-  replayProgress.value = replay.index;
-  replayPosition.textContent = `${replay.index + 1} / ${replay.frames.length}`;
+  replayPosition.textContent = `現在 第${replay.index + 1}記録（${replay.index + 1}/${replay.frames.length}）`;
   replayRecordCounts.textContent = `取得: 551 ${replay.counts.quake}件 / 556 ${replay.counts.eew}件 / 9611 ${replay.counts.shake}件 · 対象記録 ${replay.frames.length}件`;
   if (frame) {
-    replayTime.textContent = formatClock(frame.at);
     const kind = frame.kind === 'eew' ? `EEW 第${frame.eew.issue.serial}報` : frame.kind === 'shake' ? '揺れ感知解析' : '地震情報の発表';
     replayRecordKind.textContent = kind;
     const mapKind = frame.kind === 'eew'
@@ -1580,13 +1599,14 @@ function renderReplayControls(): void {
       : frame.kind === 'shake'
         ? `揺れ解析 ${frame.detection.count}件 ${Math.round(frame.detection.confidence * 100)}%`
         : '地震情報';
-    replayMapDetail.textContent = `${mapKind} · ${formatClock(frame.at)} · ${replay.index + 1}/${replay.frames.length}`;
+    replayMapDetail.textContent = `${mapKind} · 記録 ${replayClockFormatter.format(new Date(frame.at))} · ${replay.index + 1}/${replay.frames.length}`;
     replayRecordDetail.textContent = frame.kind === 'eew'
       ? `最大予測震度 ${scaleLabel(Math.max(-1, ...frame.eew.areas.map((area) => area.scaleTo ?? -1)))} · ${aggregateEewPrefectures(frame.eew.areas).length}府県（府県単位に集約）`
       : frame.kind === 'shake'
         ? `感知 ${frame.detection.count}件 · 解析信頼度 ${Math.round(frame.detection.confidence * 100)}% · A ${frame.areas.filter(({ confidence }) => confidence >= .8).length}地域 / B ${frame.areas.filter(({ confidence }) => confidence >= .6 && confidence < .8).length}地域`
         : `${replayIssueLabel(frame.earthquake.issueType)} · 最大震度 ${scaleLabel(frame.earthquake.maxScale)}`;
   }
+  renderReplayClock(replay);
   selectedReplayStart.disabled = true;
 }
 
@@ -1678,26 +1698,46 @@ function stopReplay(message?: string): void {
   }
 }
 
-function scheduleReplayFrame(): void {
-  if (!replayState?.playing) return;
-  const current = replayState.frames[replayState.index];
-  const nextIndex = replayState.index + 1;
-  if (!current || nextIndex >= replayState.frames.length) {
-    replayState.playing = false;
+function clearReplayTick(): void {
+  if (replayTimer !== undefined) window.clearTimeout(replayTimer);
+  replayTimer = undefined;
+}
+
+/** Advance the virtual clock from a monotonic browser clock, then change the map only at recorded timestamps. */
+function advanceReplayClock(replay: ReplayState): void {
+  if (!replay.playing || replay.lastTickAt === null) return;
+  const now = performance.now();
+  replay.elapsedMs = Math.min(replay.durationMs, replay.elapsedMs + Math.max(0, now - replay.lastTickAt) * replay.speed);
+  replay.lastTickAt = now;
+  let nextIndex = replay.index;
+  while (nextIndex + 1 < replay.frames.length && replay.frames[nextIndex + 1]!.at - replay.frames[0]!.at <= replay.elapsedMs) nextIndex++;
+  if (nextIndex !== replay.index) {
+    replay.index = nextIndex;
+    renderReplayFrame(replay.frames[nextIndex]!);
     renderReplayControls();
-    return;
+  } else {
+    renderReplayClock(replay);
   }
-  const next = replayState.frames[nextIndex]!;
-  // Recorded updates are shown in order, with compressed gaps. Neither option claims real-time playback.
-  const delay = Math.max(850, Math.min(2_800, (next.at - current.at) / 20)) / replayState.speed;
+  if (replay.elapsedMs >= replay.durationMs) {
+    replay.playing = false;
+    replay.lastTickAt = null;
+    renderReplayControls();
+  }
+}
+
+function scheduleReplayTick(): void {
+  const replay = replayState;
+  if (!replay?.playing || replayTimer !== undefined) return;
+  const nextFrameAt = replay.frames[replay.index + 1]?.at;
+  const nextFrameElapsed = nextFrameAt === undefined ? replay.durationMs : nextFrameAt - replay.frames[0]!.at;
+  const nextSecondElapsed = (Math.floor(replay.elapsedMs / 1_000) + 1) * 1_000;
+  const nextElapsed = Math.min(replay.durationMs, nextFrameElapsed, nextSecondElapsed);
+  const delay = Math.max(1, (nextElapsed - replay.elapsedMs) / replay.speed);
   replayTimer = window.setTimeout(() => {
     replayTimer = undefined;
-    if (!replayState?.playing) return;
-    replayState.index = nextIndex;
-    const frame = replayState.frames[nextIndex];
-    if (frame) renderReplayFrame(frame);
-    renderReplayControls();
-    scheduleReplayFrame();
+    if (replayState !== replay || !replay.playing) return;
+    advanceReplayClock(replay);
+    scheduleReplayTick();
   }, delay);
 }
 
@@ -1761,7 +1801,8 @@ async function startReplayForSelected(testKind?: 'eew' | 'shake' | 'none'): Prom
   }
 
   const visual = hasVisualReplay(frames);
-  replayState = { target, frames, counts, visual, index: 0, playing: visual, speed: 1 };
+  replayState = { target, frames, counts, visual, index: 0, playing: visual, speed: 1,
+    elapsedMs: 0, durationMs: Math.max(0, frames[frames.length - 1]!.at - frames[0]!.at), lastTickAt: visual ? performance.now() : null };
   const points = [projectEpicenter(target), ...frames.flatMap((frame) => frame.kind === 'shake'
     ? frame.areas.map(({ area }) => projectCoordinates(area.latitude, area.longitude))
     : frame.kind === 'eew' && frame.eew.earthquake?.hypocenter.latitude != null && frame.eew.earthquake.hypocenter.longitude != null
@@ -1775,7 +1816,7 @@ async function startReplayForSelected(testKind?: 'eew' | 'shake' | 'none'): Prom
     ? '視覚的な変化を示す複数の記録がないため、取得できた記録を静的に表示します。'
     : 'この地震は発表情報のみ確認できます。揺れの変化を再生するための記録はありません。';
   if (isTestMode) addTestLog(`${visual ? 'visual replay' : 'static publications'}: 551 ${counts.quake}, 556 ${counts.eew}, 9611 ${counts.shake}, drawable ${frames.length}`);
-  if (visual) scheduleReplayFrame();
+  if (visual) scheduleReplayTick();
 }
 
 function nearestAreaCodes(target: Earthquake): string[] {
@@ -2276,33 +2317,42 @@ list.addEventListener('click', (event) => {
 selectedReplayStart.addEventListener('click', () => void startReplayForSelected(), { signal: lifecycle.signal });
 replayPlayToggle.addEventListener('click', () => {
   if (!replayState?.visual) return;
-  if (replayTimer !== undefined) window.clearTimeout(replayTimer);
-  replayTimer = undefined;
-  if (replayState.index >= replayState.frames.length - 1 && !replayState.playing) replayState.index = 0;
-  replayState.playing = !replayState.playing;
-  renderReplayControls();
-  if (replayState.playing) {
-    const frame = replayState.frames[replayState.index];
-    if (frame) renderReplayFrame(frame);
-    scheduleReplayFrame();
+  const replay = replayState;
+  if (replay.playing) {
+    advanceReplayClock(replay);
+    replay.playing = false;
+    replay.lastTickAt = null;
+    clearReplayTick();
+  } else {
+    if (replay.elapsedMs >= replay.durationMs) {
+      replay.index = 0;
+      replay.elapsedMs = 0;
+      renderReplayFrame(replay.frames[0]!);
+    }
+    replay.playing = true;
+    replay.lastTickAt = performance.now();
   }
+  renderReplayControls();
+  scheduleReplayTick();
 }, { signal: lifecycle.signal });
 replayRestart.addEventListener('click', () => {
   if (!replayState?.visual) return;
-  if (replayTimer !== undefined) window.clearTimeout(replayTimer);
-  replayTimer = undefined;
+  clearReplayTick();
   replayState.index = 0;
+  replayState.elapsedMs = 0;
   replayState.playing = true;
+  replayState.lastTickAt = performance.now();
   renderReplayFrame(replayState.frames[0]!);
   renderReplayControls();
-  scheduleReplayFrame();
+  scheduleReplayTick();
 }, { signal: lifecycle.signal });
 function stepReplay(direction: -1 | 1): void {
   if (!replayState) return;
-  if (replayTimer !== undefined) window.clearTimeout(replayTimer);
-  replayTimer = undefined;
+  clearReplayTick();
   replayState.playing = false;
+  replayState.lastTickAt = null;
   replayState.index = Math.max(0, Math.min(replayState.frames.length - 1, replayState.index + direction));
+  replayState.elapsedMs = replayState.frames[replayState.index]!.at - replayState.frames[0]!.at;
   renderReplayFrame(replayState.frames[replayState.index]!);
   renderReplayControls();
 }
@@ -2310,11 +2360,11 @@ replayPrevious.addEventListener('click', () => stepReplay(-1), { signal: lifecyc
 replayNext.addEventListener('click', () => stepReplay(1), { signal: lifecycle.signal });
 replaySpeedToggle.addEventListener('click', () => {
   if (!replayState?.visual) return;
+  advanceReplayClock(replayState);
   replayState.speed = replayState.speed === 1 ? 4 : 1;
-  if (replayTimer !== undefined) window.clearTimeout(replayTimer);
-  replayTimer = undefined;
+  clearReplayTick();
   renderReplayControls();
-  scheduleReplayFrame();
+  scheduleReplayTick();
 }, { signal: lifecycle.signal });
 replayLiveReturn.addEventListener('click', () => {
   stopReplay('LIVE監視へ戻りました');
@@ -2389,6 +2439,14 @@ function requestHistoryOnResume(): void {
 }
 
 document.addEventListener('visibilitychange', requestHistoryOnResume, { signal: lifecycle.signal });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden || !replayState?.playing) return;
+  advanceReplayClock(replayState);
+  replayState.playing = false;
+  replayState.lastTickAt = null;
+  clearReplayTick();
+  renderReplayControls();
+}, { signal: lifecycle.signal });
 window.addEventListener('online', () => {
   if (!isTestMode && !disposed) void loadHistory('online');
 }, { signal: lifecycle.signal });
