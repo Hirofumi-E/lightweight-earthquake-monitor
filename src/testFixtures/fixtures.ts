@@ -1,5 +1,5 @@
 import { parseP2pTimestamp } from '../timeUtils';
-import type { Earthquake, P2PEEW, P2PQuake, P2PUserquake, P2PUserquakeEvaluation } from '../types';
+import type { Earthquake, P2PAreaPeers, P2PEEW, P2PQuake, P2PUserquake, P2PUserquakeEvaluation } from '../types';
 
 /**
  * Development-only payloads. These are deliberately synthetic and never represent
@@ -393,6 +393,15 @@ export function createTestNoReplayEarthquake(): P2PQuake {
 /** Synthetic individual 561 reports, using catalog area codes. */
 export function createTestUserquake(area: number): P2PUserquake {
   return { id: `test-561-${area}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, code: 561, time: p2pTime(), area };
+}
+
+export function createTestAreaPeers(): P2PAreaPeers {
+  return {
+    id: `test-555-${Date.now()}`,
+    code: 555,
+    time: p2pTime(),
+    areas: [{ id: 250, peer: 12 }, { id: 270, peer: 5 }],
+  };
 }
 
 let shakeStartedAt: string | null = null;

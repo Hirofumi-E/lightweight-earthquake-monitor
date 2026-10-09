@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchRecentEarthquakes, fetchReplayHistory, parseEarthquake, parseEew, parseEewDetection, parseShakeDetection, parseUserquake } from './api';
+import { fetchRecentEarthquakes, fetchReplayHistory, parseAreaPeers, parseEarthquake, parseEew, parseEewDetection, parseShakeDetection, parseUserquake } from './api';
 import { AudioNotifier, type AudioCue, type AudioNotifyResult } from './audioNotifier';
 import { EarthquakeStore, type EarthquakeMergeResult } from './earthquakeStore';
 import { COMPACT_MAP_VIEWBOX, MAP_VIEWBOX, projectCoordinates, projectEpicenter } from './mapProjection';
@@ -33,6 +33,7 @@ const EEW_SCALE_CODES = new Set([0, 10, 20, 30, 40, 45, 50, 55, 60, 70, 99]);
 const queryParameters = new URLSearchParams(window.location.search);
 const isTestMode = queryParameters.get('testMode') === '1';
 const isEewSandbox = !isTestMode && queryParameters.get('eewSandbox') === '1';
+const isLiveDebugMode = !isTestMode && !isEewSandbox && queryParameters.get('debugLive') === '1';
 const websocketUrl = isEewSandbox ? 'wss://api-realtime-sandbox.p2pquake.net/v2/ws' : 'wss://api.p2pquake.net/v2/ws';
 
 const PREFECTURE_NAMES = [
@@ -151,6 +152,23 @@ app.innerHTML = `
       </section>
     </header>
     <main class="workspace">
+      ${isLiveDebugMode ? `<details id="live-diagnostics" class="live-diagnostics" open>
+        <summary>LIVE診断</summary>
+        <div class="live-diagnostics-grid">
+          <span>接続</span><strong id="diag-connection">接続開始前</strong>
+          <span>最終接続成功</span><b id="diag-connected-at">—</b>
+          <span>最終メッセージ</span><b id="diag-message-at">—</b>
+          <span>切断 / 再接続</span><b id="diag-reconnects">0 / 0</b>
+          <span>受信 / JSON失敗</span><b id="diag-message-counts">0 / 0</b>
+          <span>コード別 (551/554/555/556/561/9611/他)</span><b id="diag-code-counts">0 / 0 / 0 / 0 / 0 / 0 / 0</b>
+          <span>解析成功 (551/554/555/556/561/9611)</span><b id="diag-parsed-counts">0 / 0 / 0 / 0 / 0 / 0</b>
+          <span>UI反映 (551/554/555/556/561/9611)</span><b id="diag-rendered-counts">0 / 0 / 0 / 0 / 0 / 0</b>
+          <span>HTTP同期 成功 / 失敗</span><b id="diag-http-counts">0 / 0</b>
+          <span>最終HTTP同期</span><b id="diag-http-at">—</b>
+        </div>
+        <div class="live-diagnostics-log-heading">処理結果・遅延（個別データ本文は記録しません）</div>
+        <ol id="diag-event-log" class="live-diagnostics-log"><li>WebSocket接続を待っています</li></ol>
+      </details>` : ''}
       <button id="information-panel-toggle" class="information-panel-toggle" type="button" aria-expanded="true" aria-controls="information-panel" aria-label="地震情報パネルを閉じる" title="地震情報パネルを閉じる">&gt;</button>
       <div id="compact-priority-alert" class="compact-priority-alert" role="status" aria-live="assertive" hidden></div>
       <aside class="information-panel" aria-label="最新地震情報と地震履歴">
@@ -284,6 +302,10 @@ app.innerHTML = `
               <button type="button" data-test-action="connection-reconnecting">RECONNECTING</button>
               <button type="button" data-test-action="connection-offline">OFFLINE</button>
             </div>
+            <div class="test-control-group" aria-label="WebSocket統合テスト">
+              <span class="test-control-label">受信経路テスト</span>
+              <button type="button" data-test-action="mock-websocket-flow">WebSocket mock統合確認</button>
+            </div>
             <div class="test-control-group" aria-label="簡易リプレイテスト">
               <span class="test-control-label">過去データ再生</span>
               <button type="button" data-test-action="replay-eew">選択地震 EEW fixture</button>
@@ -415,6 +437,17 @@ const testPanelToggle = document.querySelector<HTMLButtonElement>('#test-panel-t
 const testPanelClose = document.querySelector<HTMLButtonElement>('#test-panel-close');
 const testLogList = document.querySelector<HTMLOListElement>('#test-log-list');
 const testLogCount = document.querySelector<HTMLSpanElement>('#test-log-count');
+const diagnosticsConnection = document.querySelector<HTMLElement>('#diag-connection');
+const diagnosticsConnectedAt = document.querySelector<HTMLElement>('#diag-connected-at');
+const diagnosticsMessageAt = document.querySelector<HTMLElement>('#diag-message-at');
+const diagnosticsReconnects = document.querySelector<HTMLElement>('#diag-reconnects');
+const diagnosticsMessageCounts = document.querySelector<HTMLElement>('#diag-message-counts');
+const diagnosticsCodeCounts = document.querySelector<HTMLElement>('#diag-code-counts');
+const diagnosticsParsedCounts = document.querySelector<HTMLElement>('#diag-parsed-counts');
+const diagnosticsRenderedCounts = document.querySelector<HTMLElement>('#diag-rendered-counts');
+const diagnosticsHttpCounts = document.querySelector<HTMLElement>('#diag-http-counts');
+const diagnosticsHttpAt = document.querySelector<HTMLElement>('#diag-http-at');
+const diagnosticsEventLog = document.querySelector<HTMLOListElement>('#diag-event-log');
 const store = new EarthquakeStore();
 let hasLoaded = false;
 let disposed = false;
@@ -426,6 +459,7 @@ let socket: WebSocket | null = null;
 let reconnectTimer: number | undefined;
 let reconnectAttempt = 0;
 let connectionEstablished = false;
+let connectionAttempted = false;
 let selectedEarthquakeId: string | null = null;
 interface ReplayState {
   target: Earthquake;
@@ -488,11 +522,86 @@ let activeEew: StoredEew | null = null;
 let eewCancelledMessageVisible = false;
 let eewTimer: number | undefined;
 const lifecycle = new AbortController();
+const DIAGNOSTIC_CODES = ['551', '554', '555', '556', '561', '9611'] as const;
+const liveDiagnostics = {
+  lastConnectedAt: null as number | null,
+  lastMessageAt: null as number | null,
+  lastHttpAt: null as number | null,
+  disconnects: 0,
+  reconnects: 0,
+  messages: 0,
+  jsonFailures: 0,
+  httpSuccesses: 0,
+  httpFailures: 0,
+  codeCounts: new Map<string, number>([...DIAGNOSTIC_CODES.map((code) => [code, 0] as const), ['other', 0]]),
+  parseSuccessCounts: new Map<string, number>(DIAGNOSTIC_CODES.map((code) => [code, 0] as const)),
+  renderedCounts: new Map<string, number>(DIAGNOSTIC_CODES.map((code) => [code, 0] as const)),
+  log: [] as string[],
+};
 interface MapViewBox {
   x: number;
   y: number;
   width: number;
   height: number;
+}
+
+function diagnosticClock(timestamp: number | null): string {
+  if (timestamp === null) return '—';
+  return new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(timestamp);
+}
+
+function addLiveDiagnostic(message: string): void {
+  if (!isLiveDebugMode || !diagnosticsEventLog) return;
+  const time = diagnosticClock(Date.now());
+  liveDiagnostics.log.push(`${time} ${message}`);
+  if (liveDiagnostics.log.length > 100) liveDiagnostics.log.splice(0, liveDiagnostics.log.length - 100);
+  diagnosticsEventLog.replaceChildren(...liveDiagnostics.log.map((line) => {
+    const item = document.createElement('li');
+    item.textContent = line;
+    return item;
+  }));
+}
+
+function renderLiveDiagnostics(): void {
+  if (!isLiveDebugMode || !diagnosticsConnection || !diagnosticsConnectedAt || !diagnosticsMessageAt || !diagnosticsReconnects || !diagnosticsMessageCounts || !diagnosticsCodeCounts || !diagnosticsParsedCounts || !diagnosticsRenderedCounts || !diagnosticsHttpCounts || !diagnosticsHttpAt) return;
+  const socketState = socket?.readyState;
+  const stateLabel = socketState === WebSocket.OPEN
+    ? liveDiagnostics.messages === 0 ? 'LIVE・接続中・イベント受信待機' : 'LIVE・接続中'
+    : socketState === WebSocket.CONNECTING ? connectionEstablished ? 'RECONNECTING（接続試行中）' : 'CONNECTING'
+      : connectionEstablished && reconnectTimer !== undefined ? '再接続待ち'
+        : 'OFFLINE';
+  diagnosticsConnection.textContent = stateLabel;
+  diagnosticsConnectedAt.textContent = diagnosticClock(liveDiagnostics.lastConnectedAt);
+  diagnosticsMessageAt.textContent = liveDiagnostics.lastMessageAt === null ? '—' : `${diagnosticClock(liveDiagnostics.lastMessageAt)}（${formatAge(liveDiagnostics.lastMessageAt)}）`;
+  diagnosticsReconnects.textContent = `${liveDiagnostics.disconnects} / ${liveDiagnostics.reconnects}`;
+  diagnosticsMessageCounts.textContent = `${liveDiagnostics.messages} / ${liveDiagnostics.jsonFailures}`;
+  diagnosticsCodeCounts.textContent = [...DIAGNOSTIC_CODES, 'other'].map((code) => String(liveDiagnostics.codeCounts.get(code) ?? 0)).join(' / ');
+  diagnosticsParsedCounts.textContent = DIAGNOSTIC_CODES.map((code) => String(liveDiagnostics.parseSuccessCounts.get(code) ?? 0)).join(' / ');
+  diagnosticsRenderedCounts.textContent = DIAGNOSTIC_CODES.map((code) => String(liveDiagnostics.renderedCounts.get(code) ?? 0)).join(' / ');
+  diagnosticsHttpCounts.textContent = `${liveDiagnostics.httpSuccesses} / ${liveDiagnostics.httpFailures}`;
+  diagnosticsHttpAt.textContent = diagnosticClock(liveDiagnostics.lastHttpAt);
+}
+
+function countLiveDiagnosticMessage(code: string | null): void {
+  if (!isLiveDebugMode) return;
+  liveDiagnostics.messages += 1;
+  liveDiagnostics.lastMessageAt = Date.now();
+  const key = code && liveDiagnostics.codeCounts.has(code) ? code : 'other';
+  liveDiagnostics.codeCounts.set(key, (liveDiagnostics.codeCounts.get(key) ?? 0) + 1);
+  renderLiveDiagnostics();
+}
+
+function reportLiveProcessing(code: string, result: string, receiveAt: number, sourceTimestamp: string | null = null, sourceLatencyLabel = '発表→受信', parsed = true, rendered = false): void {
+  if (!isLiveDebugMode) return;
+  if (liveDiagnostics.parseSuccessCounts.has(code) && parsed) liveDiagnostics.parseSuccessCounts.set(code, (liveDiagnostics.parseSuccessCounts.get(code) ?? 0) + 1);
+  if (liveDiagnostics.renderedCounts.has(code) && rendered) liveDiagnostics.renderedCounts.set(code, (liveDiagnostics.renderedCounts.get(code) ?? 0) + 1);
+  const uiAt = Date.now();
+  const receiveDelay = Math.max(0, uiAt - receiveAt);
+  const sourceAt = parseP2pTimestamp(sourceTimestamp);
+  const sourceClock = sourceAt === null ? '計測不可' : diagnosticClock(sourceAt);
+  const sourceLatency = sourceAt === null ? '計測不可' : formatLatency(calculateLatency(receiveAt, sourceTimestamp));
+  addLiveDiagnostic(`${code}: ${result} · 発表/更新 ${sourceClock} · 受信 ${diagnosticClock(receiveAt)} · UI ${diagnosticClock(uiAt)}（受信→UI ${receiveDelay}ms） · ${sourceLatencyLabel} ${sourceLatency}`);
+  renderLiveDiagnostics();
 }
 
 interface MapDragState {
@@ -743,6 +852,8 @@ function updateReceiveAgeDisplays(): void {
     if (now - state.lastReceivedAt >= RAW_SENSING_TTL_MS) {
       rawSensingAreas.delete(code);
       expiredRawArea = true;
+      const areaName = areaByCode.get(code)?.name ?? code;
+      addLiveDiagnostic(`561: TTL終了・${areaName}のマーカーを解除`);
     }
   }
   if (expiredRawArea) renderRawSensingMarkers();
@@ -760,11 +871,18 @@ function updateReceiveAgeDisplays(): void {
   latestReceivedAge.textContent = latestTiming ? formatAge(latestTiming.browserReceivedAt) : '待機中';
   if (activeEew) eewReceivedAge.textContent = formatAge(activeEew.receiveTiming.browserReceivedAt);
   updateCurrentTime();
+  renderLiveDiagnostics();
 }
 
 function startReceiveAgeTimer(): void {
   updateReceiveAgeDisplays();
   if (receiveAgeTimer === undefined) receiveAgeTimer = window.setInterval(updateReceiveAgeDisplays, 1_000);
+}
+
+function incomingCode(payload: unknown): string | null {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return null;
+  const code = (payload as Record<string, unknown>).code;
+  return typeof code === 'number' && Number.isFinite(code) ? String(code) : null;
 }
 
 function addTestTimingLog(label: string, timing: ReceiveTiming, sourceLabel = 'source→Browser'): void {
@@ -951,18 +1069,22 @@ function renderRawSensingMarkers(): void {
   }
 }
 
-function receiveRawSensing(areaCode: number | undefined, id: string): string | null {
-  if (!settings.shakeDetectionEnabled || areaCode === undefined) return null;
-  if (rawSensingIds.has(id)) return areaByCode.get(String(areaCode))?.name ?? null;
+interface RawSensingResult { areaName: string | null; outcome: 'added' | 'duplicate' | 'disabled' | 'missing-area-code' | 'unknown-region' | 'covered-by-9611' | 'rendered'; }
+
+function receiveRawSensing(areaCode: number | undefined, id: string): RawSensingResult {
+  if (!settings.shakeDetectionEnabled) return { areaName: null, outcome: 'disabled' };
+  if (areaCode === undefined) return { areaName: null, outcome: 'missing-area-code' };
+  const code = String(areaCode);
+  const area = areaByCode.get(code);
+  if (rawSensingIds.has(id)) return { areaName: area?.name ?? null, outcome: 'duplicate' };
   rawSensingIds.add(id);
   rawSensingIdOrder.push(id);
   if (rawSensingIdOrder.length > MAX_RAW_SENSING_IDS) {
     const oldest = rawSensingIdOrder.shift();
     if (oldest) rawSensingIds.delete(oldest);
   }
-  const code = String(areaCode);
-  const area = areaByCode.get(code);
-  if (!area) return null;
+  if (!area) return { areaName: null, outcome: 'unknown-region' };
+  const alreadyAnalyzed = Boolean(currentShakeDetection && [...currentShakeDetection.areaConfidences].some(([areaCodeKey, confidence]) => String(Number(areaCodeKey)) === String(Number(code)) && confidence >= MEDIUM_CONFIDENCE_THRESHOLD));
   const previous = rawSensingAreas.get(code);
   rawSensingAreas.set(code, { count: Math.min(999, (previous?.count ?? 0) + 1), lastReceivedAt: Date.now() });
   if (rawSensingAreas.size > MAX_RAW_SENSING_AREAS) {
@@ -970,7 +1092,7 @@ function receiveRawSensing(areaCode: number | undefined, id: string): string | n
     if (oldestCode) rawSensingAreas.delete(oldestCode);
   }
   renderRawSensingMarkers();
-  return area.name;
+  return { areaName: area.name, outcome: alreadyAnalyzed ? 'covered-by-9611' : 'rendered' };
 }
 
 function clearRawSensingState(): void {
@@ -1887,11 +2009,19 @@ async function startReplayForSelected(testKind?: 'eew' | 'shake' | 'none' | 'sha
     const controller = new AbortController();
     replayController = controller;
     replayTimeoutTimer = window.setTimeout(() => controller.abort(new DOMException('Replay request timed out', 'TimeoutError')), 12_000);
+    liveDiagnostics.lastHttpAt = Date.now();
+    renderLiveDiagnostics();
     try {
       const history = await fetchReplayHistory(controller.signal);
+      liveDiagnostics.httpSuccesses += 1;
+      liveDiagnostics.lastHttpAt = Date.now();
+      addLiveDiagnostic(`HTTP再生履歴: 成功・${history.records.length}件${history.mayBeTruncated ? '・上限到達の可能性' : ''}`);
       payloads = history.records;
       historyMayBeTruncated = history.mayBeTruncated;
     } catch (error) {
+      liveDiagnostics.httpFailures += 1;
+      liveDiagnostics.lastHttpAt = Date.now();
+      addLiveDiagnostic(`HTTP再生履歴: 失敗・${error instanceof Error ? error.message : '通信エラー'}`);
       if (controller.signal.aborted && replayController !== controller) return;
       if (controller.signal.aborted && disposed) return;
       const message = error instanceof Error ? error.message : '通信に失敗しました';
@@ -1900,6 +2030,7 @@ async function startReplayForSelected(testKind?: 'eew' | 'shake' | 'none' | 'sha
       selectedReplayStart.disabled = false;
       return;
     } finally {
+      renderLiveDiagnostics();
       if (replayTimeoutTimer !== undefined) window.clearTimeout(replayTimeoutTimer);
       replayTimeoutTimer = undefined;
       if (replayController === controller) replayController = undefined;
@@ -2034,6 +2165,7 @@ function setConnectionState(state: 'live' | 'reconnecting' | 'offline'): void {
   connectionDescription.textContent = description;
   connectionStatus.title = description;
   monitorConnection.textContent = state === 'live' ? 'LIVE' : state === 'reconnecting' ? 'RECONNECTING' : 'OFFLINE';
+  renderLiveDiagnostics();
 }
 
 function flushMapDrag(): void {
@@ -2282,6 +2414,20 @@ function runTestAction(action: string): void {
   if (!isTestMode || !testFixtures) return;
 
   switch (action) {
+    case 'mock-websocket-flow': {
+      const mockSocket = new MockWebSocketAdapter();
+      mockSocket.onmessage = (event) => processWebSocketFrame(event.data, 'test', Date.now());
+      const mockFrames = [
+        testFixtures.createTestEarthquake(++testEarthquakeSequence),
+        testFixtures.createTestAreaPeers(),
+        testFixtures.createTestUserquake(250),
+        testFixtures.createTestShakeStart(),
+        testFixtures.createTestEewReport1(),
+      ];
+      for (const frame of mockFrames) mockSocket.emit(frame);
+      addTestLog(`WebSocket mock統合確認: 551 event ${store.recent.length}件 / 561 raw map ${rawShakeMarkers.childElementCount} / 9611 A/B map ${shakeDetectionMarkers.childElementCount} / 556 ${eewDetails.hidden ? '未表示' : '表示'}`);
+      break;
+    }
     case 'quake':
       testEarthquakeSequence += 1;
       handleIncomingPayload(testFixtures.createTestEarthquake(testEarthquakeSequence), 'test');
@@ -2531,6 +2677,8 @@ async function loadHistory(reason: HistorySyncReason): Promise<void> {
   }
 
   historyRequestInFlight = true;
+  liveDiagnostics.lastHttpAt = Date.now();
+  renderLiveDiagnostics();
   const controller = new AbortController();
   historyController = controller;
   try {
@@ -2540,6 +2688,9 @@ async function loadHistory(reason: HistorySyncReason): Promise<void> {
         const earthquakes = await fetchRecentEarthquakes(controller.signal);
         const browserReceivedAt = Date.now();
         if (disposed) return;
+        liveDiagnostics.httpSuccesses += 1;
+        liveDiagnostics.lastHttpAt = browserReceivedAt;
+        addLiveDiagnostic(`HTTP履歴 ${reason}: 成功・551 ${earthquakes.length}発表を解析`);
         mergeEarthquakeHistory(earthquakes, browserReceivedAt);
         lastHistorySyncSucceededAt = browserReceivedAt;
         updateReceiveAgeDisplays();
@@ -2547,6 +2698,9 @@ async function loadHistory(reason: HistorySyncReason): Promise<void> {
       } catch (error) {
         if (disposed || (error instanceof DOMException && error.name === 'AbortError')) return;
         const message = error instanceof Error ? error.message : '通信に失敗しました';
+        liveDiagnostics.httpFailures += 1;
+        liveDiagnostics.lastHttpAt = Date.now();
+        addLiveDiagnostic(`HTTP履歴 ${reason}: 失敗・${message}`);
         if (!hasLoaded && reason !== 'periodic') {
           latestLoading.hidden = false;
           latestLoading.innerHTML = `<div class="error-state"><strong>情報を取得できませんでした</strong><span>${escapeHtml(message)}</span><button id="retry-button" class="retry-button" type="button">再試行</button></div>`;
@@ -2563,6 +2717,7 @@ async function loadHistory(reason: HistorySyncReason): Promise<void> {
           notice.textContent = `地震情報を取得できませんでした: ${message}`;
         }
       }
+      renderLiveDiagnostics();
     } while (queuedHistorySync && !disposed);
   } finally {
     historyRequestInFlight = false;
@@ -2580,7 +2735,10 @@ function requestHistoryOnResume(): void {
   void loadHistory('resume');
 }
 
-document.addEventListener('visibilitychange', requestHistoryOnResume, { signal: lifecycle.signal });
+document.addEventListener('visibilitychange', () => {
+  requestHistoryOnResume();
+  if (document.visibilityState === 'visible') ensureProductionSocket();
+}, { signal: lifecycle.signal });
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden || !replayState?.playing) return;
   advanceReplayClock(replayState);
@@ -2590,13 +2748,52 @@ document.addEventListener('visibilitychange', () => {
   renderReplayControls();
 }, { signal: lifecycle.signal });
 window.addEventListener('online', () => {
-  if (!isTestMode && !disposed) void loadHistory('online');
+  if (!isTestMode && !disposed) {
+    void loadHistory('online');
+    ensureProductionSocket();
+  }
 }, { signal: lifecycle.signal });
 
 type IncomingPayloadSource = 'websocket' | 'test' | 'test-priority';
 
+class MockWebSocketAdapter {
+  onmessage: ((event: { data: string }) => void) | null = null;
+
+  emit(payload: unknown): void {
+    this.onmessage?.({ data: JSON.stringify(payload) });
+  }
+}
+
+function processWebSocketFrame(data: unknown, source: IncomingPayloadSource, browserReceivedAt: number): void {
+  if (typeof data !== 'string') {
+    if (source === 'websocket') {
+      liveDiagnostics.messages += 1;
+      liveDiagnostics.lastMessageAt = browserReceivedAt;
+      liveDiagnostics.jsonFailures += 1;
+      addLiveDiagnostic('JSON解析失敗: テキスト以外のWebSocketフレーム');
+      renderLiveDiagnostics();
+    }
+    return;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(data);
+  } catch {
+    if (source === 'websocket') {
+      countLiveDiagnosticMessage(null);
+      liveDiagnostics.jsonFailures += 1;
+      addLiveDiagnostic('JSON解析失敗: 内容は記録していません');
+      renderLiveDiagnostics();
+    }
+    return;
+  }
+  if (source === 'websocket') countLiveDiagnosticMessage(incomingCode(payload));
+  handleIncomingPayload(payload, source, browserReceivedAt);
+}
+
 function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource = 'websocket', browserReceivedAt = Date.now()): void {
   lastWebSocketReceivedAt = browserReceivedAt;
+  const code = incomingCode(payload) ?? 'other';
   const parsedEew = parseEew(payload);
   if (parsedEew) {
     if (replayState || replayController) {
@@ -2604,6 +2801,7 @@ function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource =
     }
     const receiveTiming = createReceiveTiming(payload, browserReceivedAt, parsedEew.issue.time);
     const result = updateEew(parsedEew, receiveTiming);
+    reportLiveProcessing('556', `${result}${result === 'new' || result === 'updated' ? `・画面反映、serial ${parsedEew.issue.serial}` : result === 'cancelled' ? '・取消を画面反映' : '・表示状態変更なし'}`, browserReceivedAt, parsedEew.issue.time, '発表→受信', true, result === 'new' || result === 'updated' || result === 'cancelled');
     if (result === 'new' && settings.eewAudioEnabled) notifyAudio('eew');
     if (result === 'cancelled' && settings.eewAudioEnabled) notifyAudio('cancel');
     if (source === 'test') {
@@ -2627,9 +2825,19 @@ function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource =
   }
 
   // 554 only signals that an EEW publication was detected. It is not an EEW payload.
-  if (parseEewDetection(payload)) {
+  const parsedEewDetection = parseEewDetection(payload);
+  if (parsedEewDetection) {
+    reportLiveProcessing('554', '解析成功・発表検出のみ（EEW表示なし）', browserReceivedAt, parsedEewDetection.time, 'P2P受信時刻→Browser');
     if (source === 'test') addTestLog('554 EEW publication detected (display not started)');
     updateReceiveAgeDisplays();
+    return;
+  }
+
+  const parsedAreaPeers = parseAreaPeers(payload);
+  if (parsedAreaPeers) {
+    const matchedAreas = parsedAreaPeers.areas.filter(({ id }) => areaByCode.has(String(id))).length;
+    reportLiveProcessing('555', `解析成功・接続ピア地域 ${parsedAreaPeers.areas.length}件、地域コード照合 ${matchedAreas}/${parsedAreaPeers.areas.length}・地震監視画面の対象外`, browserReceivedAt, parsedAreaPeers.time, 'P2P受信時刻→Browser');
+    if (source === 'test') addTestLog(`555 peer distribution parsed: ${matchedAreas}/${parsedAreaPeers.areas.length} area codes matched; no earthquake map layer`);
     return;
   }
 
@@ -2640,6 +2848,13 @@ function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource =
     }
     const receiveTiming = createReceiveTiming(payload, browserReceivedAt, parsedShakeDetection.updatedAt);
     const shakeResult = updateShakeDetection(parsedShakeDetection, receiveTiming);
+    const categories = confidenceAreaCategories(parsedShakeDetection);
+    const matchedCodes = [...parsedShakeDetection.areaConfidences.keys()].filter((areaCode) => areaByCode.has(areaCode) || areaByCode.has(String(Number(areaCode)))).length;
+    const eligibleCodes = [...parsedShakeDetection.areaConfidences].filter(([, confidence]) => confidence >= MEDIUM_CONFIDENCE_THRESHOLD);
+    const adoptedMarkers = shakeDetectionMarkers.childElementCount;
+    const zeroReason = adoptedMarkers > 0 ? '' : !settings.shakeDetectionEnabled ? '・設定OFF' : parsedShakeDetection.count <= 0 || parsedShakeDetection.confidence <= 0 ? '・非検出値' : eligibleCodes.length === 0 ? '・信頼度B未満' : matchedCodes === 0 ? '・地域コード未照合' : '・描画対象なし';
+    const validity = parsedShakeDetection.count >= 0 && parsedShakeDetection.confidence >= 0 && parsedShakeDetection.confidence <= 1 ? 'count/confidence有効' : 'count/confidence範囲外';
+    reportLiveProcessing('9611', `${shakeResult}・${validity}・count ${parsedShakeDetection.count} / confidence ${parsedShakeDetection.confidence.toFixed(2)} / A${categories.a.length} B${categories.b.length} / 地域コード照合 ${matchedCodes}/${parsedShakeDetection.areaConfidences.size} / 地図採用 ${adoptedMarkers}${zeroReason}`, browserReceivedAt, parsedShakeDetection.updatedAt, '解析更新→受信', true, shakeResult === 'started' || shakeResult === 'updated' || shakeResult === 'ended');
     if (shakeResult === 'started' && settings.shakeAudioEnabled) notifyAudio('shake');
     if (source === 'test') {
       addTestTimingLog('9611', receiveTiming, '解析更新→受信');
@@ -2655,19 +2870,27 @@ function handleIncomingPayload(payload: unknown, source: IncomingPayloadSource =
   // 警告・通知音・自動フォーカスのトリガーにしません。
   const parsedUserquake = parseUserquake(payload);
   if (parsedUserquake) {
-    const areaName = receiveRawSensing(parsedUserquake.area, parsedUserquake.id ?? '');
+    const sensingResult = receiveRawSensing(parsedUserquake.area, parsedUserquake.id ?? '');
+    const rawOutcome = !settings.shakeDetectionEnabled ? '設定OFFで表示抑制' : parsedUserquake.area === undefined ? '地域コードなし' : sensingResult.outcome === 'unknown-region' ? `地域コード${parsedUserquake.area}が未登録` : sensingResult.outcome === 'duplicate' ? '重複排除' : sensingResult.outcome === 'covered-by-9611' ? `${sensingResult.areaName}（9611表示と重複するためマーカー抑制）` : `${sensingResult.areaName ?? '地域不明'}にマーカー追加`;
+    reportLiveProcessing('561', `解析成功・${rawOutcome}${!settings.shakeDetectionEnabled ? '' : sensingResult.outcome === 'rendered' ? `・表示中 ${rawSensingAreas.size}地域` : ''}`, browserReceivedAt, parsedUserquake.time ?? null, 'P2P受信時刻→Browser', true, sensingResult.outcome === 'rendered');
     if (source === 'test') {
-      addTestLog(`561 ${areaName ?? `area ${parsedUserquake.area ?? 'unknown'}`} received; raw regions ${rawSensingAreas.size}`);
+      addTestLog(`561 ${sensingResult.areaName ?? `area ${parsedUserquake.area ?? 'unknown'}`} received; raw regions ${rawSensingAreas.size}`);
     }
     updateReceiveAgeDisplays();
     return;
   }
 
   const earthquake = parseEarthquake(payload);
-  if (!earthquake) return;
+  if (!earthquake) {
+    const rawCode = code === 'other' ? 'unknown' : code;
+    reportLiveProcessing(rawCode, '受信したが対応パーサーで解析できず（内容非保存）', browserReceivedAt, null, '発表→受信', false);
+    return;
+  }
   const receiveTiming = createReceiveTiming(payload, browserReceivedAt, payloadString(payload, 'issue', 'time'));
   rememberEarthquakeReceiveTiming(earthquake.reportId, receiveTiming);
   const mergeResult = mergeEarthquakeHistory([earthquake], browserReceivedAt, true);
+  const reportDuplicate = mergeResult.duplicateReportIds.includes(earthquake.reportId);
+  reportLiveProcessing('551', `${reportDuplicate ? 'raw ID重複排除' : mergeResult.newEventIds.length > 0 ? '新規イベント・履歴/画面へ反映' : mergeResult.updatedEventIds.length > 0 ? '同一地震の続報・履歴/画面更新' : '新しい発表だが既存表示に変更なし'}`, browserReceivedAt, earthquake.issueTime, '発表→受信', true, mergeResult.changed);
   if (!mergeResult.changed) {
     if (source === 'test') {
       const duplicate = mergeResult.duplicateReportIds.includes(earthquake.reportId);
@@ -2695,6 +2918,8 @@ function scheduleReconnect(): void {
   setConnectionState(connectionEstablished ? 'reconnecting' : 'offline');
   const delay = Math.min(1_000 * 2 ** reconnectAttempt, 30_000);
   reconnectAttempt += 1;
+  addLiveDiagnostic(`WebSocket再接続を${Math.round(delay / 1000)}秒後に予約`);
+  renderLiveDiagnostics();
   reconnectTimer = window.setTimeout(() => {
     reconnectTimer = undefined;
     connectWebSocket();
@@ -2704,9 +2929,16 @@ function scheduleReconnect(): void {
 function connectWebSocket(): void {
   // Keep the mode check inside the connection boundary as well as in the
   // startup branch. This prevents accidental calls from timers or listeners.
-  if (isTestMode || disposed || (socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN))) return;
+  if (isTestMode || disposed || (socket && socket.readyState !== WebSocket.CLOSED)) return;
   setConnectionState(connectionEstablished ? 'reconnecting' : 'offline');
   let connection: WebSocket;
+  const isReconnectAttempt = connectionAttempted;
+  connectionAttempted = true;
+  if (isReconnectAttempt) {
+    liveDiagnostics.reconnects += 1;
+    addLiveDiagnostic('WebSocket再接続を開始');
+    renderLiveDiagnostics();
+  }
   try {
     connection = new WebSocket(websocketUrl);
   } catch {
@@ -2719,8 +2951,10 @@ function connectWebSocket(): void {
     if (disposed || socket !== connection) return;
     const shouldSyncHistory = connectionEstablished || reconnectAttempt > 0;
     connectionEstablished = true;
+    liveDiagnostics.lastConnectedAt = Date.now();
     reconnectAttempt = 0;
     setConnectionState('live');
+    addLiveDiagnostic(`WebSocket接続成功${liveDiagnostics.messages === 0 ? '・イベント受信待機' : ''}`);
     if (shouldSyncHistory) void loadHistory('reconnect');
   };
 
@@ -2728,15 +2962,8 @@ function connectWebSocket(): void {
     const browserReceivedAt = Date.now();
     lastWebSocketReceivedAt = browserReceivedAt;
     updateReceiveAgeDisplays();
-    if (disposed || socket !== connection || typeof event.data !== 'string') return;
-    let payload: unknown;
-    try {
-      payload = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-
-    handleIncomingPayload(payload, 'websocket', browserReceivedAt);
+    if (disposed || socket !== connection) return;
+    processWebSocketFrame(event.data, 'websocket', browserReceivedAt);
   };
 
   connection.onerror = () => {
@@ -2746,12 +2973,22 @@ function connectWebSocket(): void {
   connection.onclose = () => {
     if (socket !== connection) return;
     socket = null;
+    if (connectionEstablished) liveDiagnostics.disconnects += 1;
+    addLiveDiagnostic(`WebSocket close${connectionEstablished ? '（切断）' : '（接続未確立）'}`);
+    renderLiveDiagnostics();
     if (disposed) {
       setConnectionState('offline');
       return;
     }
     scheduleReconnect();
   };
+}
+
+function ensureProductionSocket(): void {
+  if (isTestMode || disposed || document.visibilityState !== 'visible') return;
+  if (socket && socket.readyState !== WebSocket.CLOSED) return;
+  if (reconnectTimer !== undefined) return;
+  connectWebSocket();
 }
 
 async function initializeTestMode(): Promise<void> {
@@ -2773,15 +3010,26 @@ async function initializeTestMode(): Promise<void> {
 function initializeProductionMode(): void {
   if (isTestMode || disposed) return;
   startHistorySyncTimer();
-  void loadHistory('startup').finally(() => {
-    // Keep the production startup path isolated from TEST MODE. The guards in
-    // loadHistory/connectWebSocket are an additional safety net for future
-    // callers and asynchronous callbacks.
-    if (!isTestMode && !disposed) connectWebSocket();
-  });
+  void loadHistory('startup');
+  // Start the live stream independently so a slow HTTP history response cannot delay it.
+  connectWebSocket();
 }
 
-window.addEventListener('pagehide', () => {
+window.addEventListener('pagehide', (event: PageTransitionEvent) => {
+  if (event.persisted) {
+    if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+    if (socket) {
+      const oldSocket = socket;
+      socket = null;
+      oldSocket.onopen = null;
+      oldSocket.onmessage = null;
+      oldSocket.onerror = null;
+      oldSocket.onclose = null;
+      oldSocket.close();
+    }
+    return;
+  }
   disposed = true;
   lifecycle.abort();
   replayController?.abort();
@@ -2819,7 +3067,13 @@ window.addEventListener('pagehide', () => {
     oldSocket.close();
   }
   setConnectionState('offline');
-}, { once: true, signal: lifecycle.signal });
+}, { signal: lifecycle.signal });
+
+window.addEventListener('pageshow', (event: PageTransitionEvent) => {
+  if (!event.persisted || isTestMode || disposed) return;
+  ensureProductionSocket();
+  requestHistoryOnResume();
+}, { signal: lifecycle.signal });
 
 startReceiveAgeTimer();
 

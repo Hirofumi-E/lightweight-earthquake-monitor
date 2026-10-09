@@ -5,6 +5,7 @@ import type {
   EewMessage,
   P2PEEW,
   P2PEEWDetection,
+  P2PAreaPeers,
   P2PQuake,
   P2PQuakeIssueType,
   P2PUserquake,
@@ -109,6 +110,17 @@ export function parseUserquake(value: unknown): P2PUserquake | null {
     time: typeof item.time === 'string' ? item.time : undefined,
     area: typeof item.area === 'number' && Number.isInteger(item.area) ? item.area : undefined,
   };
+}
+
+/** Parse the code 555 peer distribution payload for diagnostics; it is not quake data. */
+export function parseAreaPeers(value: unknown): P2PAreaPeers | null {
+  if (!isRecord(value) || value.code !== 555 || typeof value.id !== 'string' || value.id.length === 0 || typeof value.time !== 'string' || !Array.isArray(value.areas)) return null;
+  const areas: P2PAreaPeers['areas'] = [];
+  for (const entry of value.areas) {
+    if (!isRecord(entry) || !Number.isInteger(entry.id) || !Number.isInteger(entry.peer) || (entry.id as number) < 0 || (entry.peer as number) < 0) return null;
+    areas.push({ id: entry.id as number, peer: entry.peer as number });
+  }
+  return { id: value.id, code: 555, time: value.time, areas };
 }
 
 /** Parse the 9611 evaluation used by the shake detection UI. */

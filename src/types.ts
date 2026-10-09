@@ -19,6 +19,13 @@ export interface P2PUserquake {
   area?: number;
 }
 
+export interface P2PAreaPeers {
+  id: string;
+  code: 555;
+  time: string;
+  areas: Array<{ id: number; peer: number }>;
+}
+
 export interface P2PEEWArea {
   pref?: string;
   name?: string;
