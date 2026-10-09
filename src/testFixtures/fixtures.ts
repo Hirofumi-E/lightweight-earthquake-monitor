@@ -302,6 +302,79 @@ export function createTestReplayShakeReports(target: Earthquake, areaCodes: read
   }));
 }
 
+/** 0/18/36 seconds of active analysis followed by explicit non-detection at 54 seconds. */
+export function createTestReplayShakeSilenceReports(target: Earthquake, areaCodes: readonly string[] = ['240', '241', '205']): P2PUserquakeEvaluation[] {
+  const origin = parseP2pTimestamp(target.time) ?? Date.now();
+  const reports = createTestReplayShakeReports(target, areaCodes);
+  const last = reports[reports.length - 1]!;
+  const endedAt = p2pTime(origin + 74_000);
+  return [...reports, {
+    ...last,
+    id: 'test-replay-9611-' + target.id + '-non-detection',
+    time: endedAt,
+    updated_at: endedAt,
+    count: 0,
+    confidence: 0,
+    area_confidences: {},
+  }];
+}
+
+export function createTestReplayEewWithCancellation(target: Earthquake): P2PEEW[] {
+  const reports = createTestReplayEewReports(target);
+  const origin = parseP2pTimestamp(target.time) ?? Date.now();
+  const cancelledAt = p2pTime(origin + 9_000);
+  return [...reports, {
+    id: 'test-replay-556-' + target.id + '-cancel',
+    code: 556,
+    time: cancelledAt,
+    test: false,
+    cancelled: true,
+    issue: { ...reports[0]!.issue!, time: cancelledAt, serial: '4' },
+    areas: [],
+  }];
+}
+
+/** EEW is cancelled while the independently recorded shake analysis continues. */
+export function createTestReplayMixedReports(target: Earthquake, areaCodes: readonly string[] = ['240', '241', '205']): Array<P2PEEW | P2PUserquakeEvaluation> {
+  return [
+    ...createTestReplayEewWithCancellation(target),
+    ...createTestReplayShakeReports(target, areaCodes),
+  ];
+}
+
+/** Deliberately unrelated groups share nearby timestamps but differ by event identity or location. */
+export function createTestReplayUnrelatedEvents(target: Earthquake, areaCodes: readonly string[] = ['240', '241', '205']): Array<P2PEEW | P2PUserquakeEvaluation> {
+  const origin = parseP2pTimestamp(target.time) ?? Date.now();
+  const acceptedEew = createTestReplayEewReports(target);
+  const unrelatedAt = p2pTime(origin + 90_000);
+  const acceptedEarthquake = acceptedEew[0]!.earthquake!;
+  const unrelatedEew: P2PEEW = {
+    ...acceptedEew[0]!,
+    id: 'test-replay-556-' + target.id + '-unrelated',
+    issue: { ...acceptedEew[0]!.issue!, eventId: 'OTHER-' + target.id, time: unrelatedAt, serial: '1' },
+    earthquake: { ...acceptedEarthquake, originTime: p2pTime(origin + 100_000),
+      hypocenter: { ...acceptedEarthquake.hypocenter, latitude: 43.0, longitude: 145.0 } },
+  };
+  const unrelatedCancel: P2PEEW = {
+    id: 'test-replay-556-' + target.id + '-unrelated-cancel',
+    code: 556,
+    time: p2pTime(origin + 120_000),
+    test: false,
+    cancelled: true,
+    issue: { ...unrelatedEew.issue!, time: p2pTime(origin + 120_000), serial: '2' },
+  };
+  const acceptedShake = createTestReplayShakeReports(target, areaCodes);
+  const unrelatedShakeAt = p2pTime(origin + 90_000);
+  const unrelatedShake: P2PUserquakeEvaluation = {
+    ...acceptedShake[0]!,
+    id: 'test-replay-9611-' + target.id + '-unrelated',
+    started_at: p2pTime(origin + 90_000),
+    time: unrelatedShakeAt,
+    updated_at: unrelatedShakeAt,
+  };
+  return [...acceptedEew, unrelatedEew, unrelatedCancel, ...acceptedShake, unrelatedShake];
+}
+
 export function createTestNoReplayEarthquake(): P2PQuake {
   const time = p2pTime();
   return {

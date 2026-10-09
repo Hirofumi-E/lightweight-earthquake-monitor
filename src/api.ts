@@ -29,7 +29,12 @@ export async function fetchRecentEarthquakes(signal?: AbortSignal): Promise<Eart
  * Fetch a bounded page set only when the user starts a replay. The history API
  * accepts at most 100 records per request; two pages cap replay reads at 200.
  */
-export async function fetchReplayHistory(signal: AbortSignal): Promise<unknown[]> {
+export interface ReplayHistoryResult {
+  records: unknown[];
+  mayBeTruncated: boolean;
+}
+
+export async function fetchReplayHistory(signal: AbortSignal): Promise<ReplayHistoryResult> {
   const pageSize = 100;
   const maxPages = 2;
   const records: unknown[] = [];
@@ -54,7 +59,10 @@ export async function fetchReplayHistory(signal: AbortSignal): Promise<unknown[]
     if (payload.length < pageSize) break;
   }
 
-  return records.slice(0, pageSize * maxPages);
+  return {
+    records: records.slice(0, pageSize * maxPages),
+    mayBeTruncated: records.length >= pageSize * maxPages,
+  };
 }
 
 export function parseEarthquake(value: unknown): Earthquake | null {
